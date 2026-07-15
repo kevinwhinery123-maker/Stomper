@@ -73,6 +73,46 @@ Garmin and Strava should be added after the local workout model has been tested.
 
 Before enabling either connection for real users, add a hosted database, encrypted secrets, a privacy policy that names the connected data, a disconnect/delete option, and careful handling for duplicate activities that appear in both services.
 
+## Strava connection
+
+Tempo supports a secure **Connect Strava** flow. It imports recent activity name, type, date, duration, distance, elevation, and average heart-rate summary into the workout history. It does not request a Strava password. Tokens are encrypted before storage in Neon, activities are deduplicated by their Strava ID, and Disconnect revokes the connection when possible.
+
+To enable it locally:
+
+1. Create a Strava app at `https://www.strava.com/settings/api`.
+2. Set the app’s Authorization Callback Domain to `localhost`.
+3. Add these values to `.env`:
+
+   ```env
+   STRAVA_CLIENT_ID="your-client-id"
+   STRAVA_CLIENT_SECRET="your-client-secret"
+   STRAVA_REDIRECT_URI="http://localhost:3000/api/strava/callback"
+   STRAVA_TOKEN_KEY="your-base64-32-byte-key"
+   ```
+
+4. Generate the last value in PowerShell without sharing it:
+
+   ```powershell
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   ```
+
+5. Restart Tempo, open **Connect**, and choose **Connect Strava**.
+
+For deployment, replace `localhost` with the deployed domain in both the Strava app settings and `STRAVA_REDIRECT_URI`. Strava uses OAuth authorization, gives users a consent/revocation path, and uses short-lived access tokens with refresh tokens. 
+
+## Tempo Coach
+
+The **Coach** tab is a fitness-only coaching layer. It remembers the last 30 messages in Neon and can explain the current plan, schedule, effort ratings, and completed sessions. Before any optional AI request, `coach-safety.js` blocks messages involving symptoms, injuries, diagnosis, medication, rehabilitation, pregnancy, eating disorders, or self-harm. In those cases, it gives a fixed boundary response and does not send the message to an AI provider.
+
+Without an API key, Coach runs in **private preview mode** using the existing Tempo rules and data. To enable natural-language AI replies later:
+
+1. Create an OpenAI API key in your OpenAI project dashboard.
+2. Add `OPENAI_API_KEY="your-key"` to `.env` (never GitHub or chat).
+3. Optionally set `OPENAI_MODEL="gpt-5"` in `.env`.
+4. Restart Tempo, then enable the separate AI Coach consent in the Profile tab.
+
+Only the user’s goal, schedule, training level, equipment, current plan, and recent workout summaries are sent to the optional AI Coach. Optional health constraints are never included in that request. The server uses `store: false` for the API request; review your provider’s current data controls before any public launch.
+
 ## Where you can write your own code
 
 Yes—this is your project and you are encouraged to edit it.
