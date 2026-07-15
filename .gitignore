@@ -1,7 +1,9 @@
 data/store.json
 node_modules/
 .env
+.env-old-folder/
 .agents/
 .codex/
 outputs/
 work/
+.npm-cache/

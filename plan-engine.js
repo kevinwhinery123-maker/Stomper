@@ -1,47 +1,76 @@
 /**
- * Rules-based training plan generator.
- *
- * Keeping this logic separate makes it easy to read, test, and later replace
- * individual rules without touching authentication or the user interface.
+ * Date-aware, rules-based plan generator.
+ * It has no database knowledge: the server supplies the profile, workout logs,
+ * and the time a session was missed. That keeps its behavior easy to test.
  */
-function session(day, title, type, minutes, intensity, exercises) {
-  return { day, title, type, minutes, intensity, exercises, status: 'upcoming' };
-}
+const weekdayOrder = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-function generatePlan(profile, missedToday = false) {
-  const minutes = Math.max(30, Math.min(Number(profile.sessionMinutes) || 45, 75));
+function localParts(date, timezone) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+  return { year: Number(parts.year), month: Number(parts.month), day: Number(parts.day), weekday: parts.weekday };
+}
+function dateKey({ year, month, day }) { return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`; }
+function addDays(parts, days) { const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days)); return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() }; }
+function formatDate(parts, timezone) { return new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12))); }
+function template(title, type, intensity, exercises) { return { title, type, intensity, exercises }; }
+
+function workoutTemplates(profile) {
   const level = profile.trainingLevel;
+  const minutes = Math.max(30, Math.min(Number(profile.sessionMinutes) || 45, 75));
   const strengthSets = level === 'new' ? '2 × 8' : level === 'advanced' ? '4 × 6' : '3 × 8';
   const strengthMove = profile.equipment === 'bodyweight' ? 'Split squat' : profile.equipment === 'home_gym' ? 'Goblet squat' : 'Back squat';
-  const days = profile.trainingDays.length;
-  const includesRun = profile.goal !== 'build_strength';
-  const includesStrength = profile.goal !== 'run_stronger' || days >= 3;
-  const sessions = [];
-  if (includesStrength) sessions.push(session('Today', 'Lower body + intervals', 'Strength and running', minutes, 'Moderate', [[strengthMove, strengthSets], ['Romanian deadlift', level === 'new' ? '2 × 8' : '3 × 8'], ['Run intervals', level === 'new' ? '4 × 1 min' : '4 × 2 min']]));
-  else sessions.push(session('Today', 'Run intervals', 'Running', minutes, 'Moderate', [['Warm-up jog', '10 min'], ['Run intervals', level === 'new' ? '4 × 1 min' : '4 × 2 min'], ['Easy cool-down', '10 min']]));
-  if (includesRun) sessions.push(session('Thursday', 'Easy aerobic run', 'Running', Math.min(minutes, 40), 'Easy', [['Easy run', `${Math.min(minutes, 40)} min`], ['Mobility reset', '8 min']]));
-  if (includesStrength && days >= 3) sessions.push(session('Saturday', 'Full-body strength', 'Strength', minutes, 'Moderate', [['Push movement', strengthSets], ['Hip hinge', strengthSets], ['Row movement', strengthSets]]));
-  if (includesRun && days >= 4) sessions.push(session('Sunday', 'Long easy effort', 'Running', Math.min(minutes + 10, 75), 'Easy', [['Easy run or walk-run', `${Math.min(minutes + 10, 75)} min`], ['Optional mobility', '8 min']]));
+  const strength = template('Lower body + intervals', 'Strength and running', 'Moderate', [[strengthMove, strengthSets], ['Romanian deadlift', level === 'new' ? '2 × 8' : '3 × 8'], ['Run intervals', level === 'new' ? '4 × 1 min' : '4 × 2 min']]);
+  const easyRun = template('Easy aerobic run', 'Running', 'Easy', [['Easy run', `${Math.min(minutes, 40)} min`], ['Mobility reset', '8 min']]);
+  const fullBody = template('Full-body strength', 'Strength', 'Moderate', [['Push movement', strengthSets], ['Hip hinge', strengthSets], ['Row movement', strengthSets]]);
+  const longRun = template('Long easy effort', 'Running', 'Easy', [['Easy run or walk-run', `${Math.min(minutes + 10, 75)} min`], ['Optional mobility', '8 min']]);
+  if (profile.goal === 'build_strength') return [template('Lower-body strength', 'Strength', 'Moderate', [[strengthMove, strengthSets], ['Hip hinge', strengthSets], ['Core work', '2 rounds']]), template('Upper-body strength', 'Strength', 'Moderate', [['Push movement', strengthSets], ['Row movement', strengthSets], ['Carry or plank', '2 rounds']]), fullBody, template('Mobility + core', 'Recovery', 'Easy', [['Mobility flow', '15 min'], ['Core work', '2 rounds']])];
+  if (profile.goal === 'run_stronger') return [template('Run intervals', 'Running', 'Moderate', [['Warm-up jog', '10 min'], ['Intervals', level === 'new' ? '4 × 1 min' : '4 × 2 min'], ['Cool-down', '10 min']]), easyRun, longRun, template('Run drills + strength', 'Running support', 'Easy', [['Run drills', '10 min'], ['Bodyweight strength', '15 min']])];
+  return [strength, easyRun, fullBody, longRun];
+}
+function plannedSession(day, date, plan, minutes) { return { id: `${date}-${plan.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, day, date, dateLabel: day, title: plan.title, type: plan.type, minutes, intensity: plan.intensity, exercises: plan.exercises, status: 'upcoming' }; }
 
-  if (missedToday) {
-    const missed = sessions.shift();
-    missed.status = 'missed';
-    missed.day = 'Missed today';
-    sessions.unshift(missed, session('Tomorrow', 'Recovery + movement reset', 'Recovery', 20, 'Easy', [['Walk, bike, or mobility', '15 min'], ['Light stretching', '5 min']]));
-    if (includesStrength) sessions.splice(2, 0, session('Friday', 'Rescheduled strength focus', 'Strength', Math.min(minutes, 45), 'Moderate', [[strengthMove, strengthSets], ['Hip hinge', '2 × 8'], ['Core carry or plank', '2 rounds']]));
-    return {
-      title: 'Your week has been adjusted—without cramming.',
-      sessions,
-      adjustment: 'Today’s missed session is not pushed onto tomorrow. Tomorrow becomes light recovery, then the most valuable strength work returns later in the week at a manageable dose.',
-      why: ['Avoids stacking two demanding days together.', 'Keeps an easy movement day to maintain the habit.', 'Prioritizes the highest-value session later this week.']
-    };
+function generatePlan(profile, options = {}) {
+  const now = options.now || new Date();
+  const timezone = profile.timezone || 'UTC';
+  const today = localParts(now, timezone);
+  const todayKey = dateKey(today);
+  const todayIndex = weekdayOrder.indexOf(today.weekday);
+  const weekStart = addDays(today, -todayIndex);
+  const selectedDays = [...new Set(profile.trainingDays || [])].filter(day => weekdayOrder.includes(day)).sort((a, b) => weekdayOrder.indexOf(a) - weekdayOrder.indexOf(b));
+  const templates = workoutTemplates(profile);
+  const minutes = Math.max(30, Math.min(Number(profile.sessionMinutes) || 45, 75));
+  const sessions = selectedDays.map((day, index) => {
+    const date = dateKey(addDays(weekStart, weekdayOrder.indexOf(day)));
+    const session = plannedSession(day, date, templates[index % templates.length], minutes);
+    session.dateLabel = formatDate(addDays(weekStart, weekdayOrder.indexOf(day)), timezone);
+    return session;
+  });
+  const workouts = options.workouts || [];
+  const completedDates = new Set(workouts.filter(workout => workout.source === 'plan' && workout.outcome === 'completed').map(workout => dateKey(localParts(new Date(workout.loggedAt), timezone))));
+  sessions.forEach(session => { if (completedDates.has(session.date)) session.status = 'completed'; else if (session.date < todayKey) session.status = 'missed'; else if (session.date === todayKey) session.status = 'today'; });
+
+  const missedDate = options.missedToday?.at ? dateKey(localParts(new Date(options.missedToday.at), timezone)) : null;
+  const isCurrentWeekMiss = missedDate && missedDate >= dateKey(weekStart) && missedDate <= dateKey(addDays(weekStart, 6));
+  let adjustment = null;
+  if (isCurrentWeekMiss) {
+    const missedIndex = sessions.findIndex(session => session.date === missedDate);
+    if (missedIndex >= 0 && sessions[missedIndex].status !== 'completed') {
+      const missed = sessions[missedIndex]; missed.status = 'missed';
+      const nextIndex = sessions.findIndex((session, index) => index > missedIndex && session.date >= todayKey && session.status !== 'completed');
+      if (nextIndex >= 0) {
+        sessions[nextIndex] = { ...sessions[nextIndex], title: 'Recovery + movement reset', type: 'Recovery', intensity: 'Easy', minutes: 20, exercises: [['Walk, bike, or mobility', '15 min'], ['Light stretching', '5 min']], adjusted: true };
+        const followingIndex = sessions.findIndex((session, index) => index > nextIndex && session.date >= todayKey && session.status !== 'completed');
+        if (followingIndex >= 0) sessions[followingIndex] = { ...sessions[followingIndex], title: `Rescheduled: ${missed.title}`, minutes: Math.min(missed.minutes, 45), exercises: [...missed.exercises.slice(0, 2), ['Core or mobility', '2 rounds']], adjusted: true };
+        adjustment = 'A missed session is handled with an easier re-entry day first. The most valuable work returns on the following training day, without stacking two hard sessions together.';
+      }
+    }
   }
-  return {
-    title: profile.goal === 'build_strength' ? 'A stronger week, built around you.' : profile.goal === 'both' ? 'Strength and running, in balance.' : 'A running week with strength behind it.',
-    sessions,
-    adjustment: null,
-    why: ['Your selected goal determines the balance of running and strength.', `Your ${days}-day schedule spaces hard efforts apart.`, `The session volume is scaled for a ${level} starting point.`]
-  };
+  const title = profile.goal === 'build_strength' ? 'A stronger week, built around your schedule.' : profile.goal === 'both' ? 'Strength and running, aligned to your week.' : 'A running week with strength behind it.';
+  const todaySession = sessions.find(session => session.date === todayKey) || null;
+  const weekStartKey = dateKey(weekStart), weekEndKey = dateKey(addDays(weekStart, 6));
+  const trainingMinutes = workouts.filter(workout => { const date = dateKey(localParts(new Date(workout.loggedAt), timezone)); return workout.outcome === 'completed' && date >= weekStartKey && date <= weekEndKey; }).reduce((total, workout) => total + Number(workout.durationMinutes || 0), 0);
+  const calendar = weekdayOrder.map((day, index) => { const parts = addDays(weekStart, index); const scheduled = sessions.find(session => session.day === day); return { day, date: dateKey(parts), dateLabel: formatDate(parts, timezone), status: scheduled ? scheduled.status : 'rest' }; });
+  return { title, timezone, today: { date: todayKey, label: formatDate(today, timezone), session: todaySession }, weekLabel: `${formatDate(weekStart, timezone)} – ${formatDate(addDays(weekStart, 6), timezone)}`, sessions, calendar, summary: { completed: sessions.filter(session => session.status === 'completed').length, planned: sessions.length, trainingMinutes }, adjustment, why: [`Your selected days (${selectedDays.join(', ') || 'none'}) create the week’s rhythm.`, `This plan reflects a ${profile.trainingLevel} starting point and ${profile.equipment.replace('_', ' ')} access.`, adjustment ? 'The current-week miss changes only the remaining sessions; a new week starts clean.' : 'Completed and missed sessions are based on the current date in your saved timezone.'] };
 }
 
-module.exports = { generatePlan };
+module.exports = { generatePlan, localParts, dateKey };

@@ -19,7 +19,7 @@ Open `index.html` in a browser to test it. The navigation and all primary action
 2. Run `node server.js`.
 3. Visit `http://localhost:3000`.
 
-The server provides a real local account and profile API. Your test account data is saved in `data/store.json`; it is deliberately excluded from Git so passwords and test data do not get committed.
+The server now connects to Neon through the private `DATABASE_URL` in `.env`. Your user accounts, profiles, and workouts are stored in PostgreSQL; `.env` remains excluded from Git so the database password is never committed.
 
 ## Authentication and profiles, in plain English
 
@@ -33,15 +33,23 @@ After sign-in, the browser receives a small session cookie. Think of it as a tem
 
 ### Important: local demo vs. publish-ready system
 
-The included server is designed to teach and test the workflow. It keeps data in a local JSON file and keeps sessions in memory, so signing in again after restarting the server is expected. It is not the final security architecture.
+The included server now keeps product data in Neon/PostgreSQL. It still keeps sign-in sessions in memory, so signing in again after restarting the server is expected. That is acceptable during development, but a published version needs durable sessions.
 
-For publishing, migrate users and profiles to PostgreSQL, store sessions in a durable session store, use a managed authentication provider or secure password-reset/email-verification flow, enforce HTTPS, set the cookie `Secure` flag, add rate limiting, and store secrets in environment variables. This is normal product progression—not a mistake in the local prototype.
+For publishing, store sessions in a durable session store, use a managed authentication provider or secure password-reset/email-verification flow, enforce HTTPS, set the cookie `Secure` flag, add rate limiting, and store secrets in environment variables. This is normal product progression—not a mistake in the local prototype.
+
+## Neon database
+
+`db.js` is the small database layer that talks to Neon. It creates three tables: `users`, `profiles`, and `workouts`. The application creates these tables automatically when it starts.
+
+If you created accounts before moving to Neon, run `npm.cmd --cache .npm-cache run db:migrate` once. It copies the local learning data in `data/store.json` into Neon without adding it to Git. The migration is safe to rerun: it does not create duplicate workout records.
 
 ## Personalized plan generation and missed workouts
 
 `plan-engine.js` is the first coaching engine. It turns a saved profile into a weekly plan using readable rules instead of a black-box recommendation. It considers the chosen goal, days available, session length, experience, and equipment.
 
 When a user selects **“I can’t train today”**, the app records that the day was missed and regenerates the plan. It does not pile the missed workout onto tomorrow. Instead, it inserts a short recovery/movement day, pushes a reduced high-value strength session later in the week, and explains the adjustment in the plan. This is deliberately conservative: early training products should protect consistency and recovery rather than encourage catch-up behavior.
+
+The plan is date-aware: it reads the user’s saved timezone and selected weekdays, produces the current Monday–Sunday training week, and refreshes when the calendar changes. A missed-session adjustment lasts only through that calendar week, so a new week begins with a clean plan.
 
 Run `node --test` to check the two core plan behaviors. The tests are in `test/plan-engine.test.js` and are a good place to add a new test whenever you introduce a coaching rule.
 
