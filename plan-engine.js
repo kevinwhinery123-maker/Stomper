@@ -28,6 +28,29 @@ function workoutTemplates(profile) {
   return [strength, easyRun, fullBody, longRun];
 }
 function plannedSession(day, date, plan, minutes) { return { id: `${date}-${plan.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, day, date, dateLabel: day, title: plan.title, type: plan.type, minutes, intensity: plan.intensity, exercises: plan.exercises, status: 'upcoming' }; }
+function applyFeedbackAdjustment(sessions, workouts, todayKey, weekStartKey) {
+  const recent = workouts.filter(workout => { const logged = new Date(workout.loggedAt); return !Number.isNaN(logged); });
+  const latest = [...recent].sort((a, b) => new Date(b.loggedAt) - new Date(a.loggedAt))[0];
+  const remaining = sessions.filter(session => ['today', 'upcoming'].includes(session.status));
+  const skippedRecently = recent.filter(workout => workout.outcome === 'skipped').length;
+  const comfortable = recent.filter(workout => workout.outcome === 'completed' && Number(workout.perceivedEffort) > 0 && Number(workout.perceivedEffort) <= 5);
+  if (!remaining.length) return null;
+  if (latest && latest.outcome === 'completed' && Number(latest.perceivedEffort) >= 9) {
+    const target = remaining.find(session => session.intensity !== 'Easy') || remaining[0];
+    target.title = `Recovery-adjusted: ${target.title}`; target.type = 'Recovery'; target.intensity = 'Easy'; target.minutes = Math.min(target.minutes, 25); target.exercises = [['Easy walk, bike, or mobility', '15 min'], ['Light stretching', '5 min']]; target.adjusted = true;
+    return { type: 'recovery', message: 'Your last workout was rated very hard, so the next demanding session was changed to a short recovery day. This protects consistency instead of pushing through accumulated fatigue.' };
+  }
+  if (skippedRecently >= 2) {
+    remaining.forEach(session => { session.minutes = Math.max(20, Math.round(session.minutes * 0.75)); session.title = `Reduced: ${session.title}`; session.adjusted = true; });
+    return { type: 'reduced', message: 'Two or more recent skips suggest the current workload may not fit real life. Remaining sessions are shorter this week so the plan is easier to restart.' };
+  }
+  if (comfortable.length >= 3 && comfortable.slice(0, 3).every(workout => Number(workout.perceivedEffort) <= 5)) {
+    const target = remaining.find(session => session.intensity === 'Moderate') || remaining[0];
+    target.exercises = [...target.exercises, ['Gentle progression', 'Add 1 rep or 5 min only if form feels strong']]; target.adjusted = true;
+    return { type: 'progression', message: 'Several recent workouts felt manageable, so the next moderate session includes one small progression. It is optional and should not compromise form or recovery.' };
+  }
+  return null;
+}
 
 function generatePlan(profile, options = {}) {
   const now = options.now || new Date();
@@ -48,6 +71,8 @@ function generatePlan(profile, options = {}) {
   const workouts = options.workouts || [];
   const completedDates = new Set(workouts.filter(workout => workout.source === 'plan' && workout.outcome === 'completed').map(workout => dateKey(localParts(new Date(workout.loggedAt), timezone))));
   sessions.forEach(session => { if (completedDates.has(session.date)) session.status = 'completed'; else if (session.date < todayKey) session.status = 'missed'; else if (session.date === todayKey) session.status = 'today'; });
+
+  const feedbackAdjustment = applyFeedbackAdjustment(sessions, workouts, todayKey, dateKey(weekStart));
 
   const missedDate = options.missedToday?.at ? dateKey(localParts(new Date(options.missedToday.at), timezone)) : null;
   const isCurrentWeekMiss = missedDate && missedDate >= dateKey(weekStart) && missedDate <= dateKey(addDays(weekStart, 6));
@@ -70,7 +95,8 @@ function generatePlan(profile, options = {}) {
   const weekStartKey = dateKey(weekStart), weekEndKey = dateKey(addDays(weekStart, 6));
   const trainingMinutes = workouts.filter(workout => { const date = dateKey(localParts(new Date(workout.loggedAt), timezone)); return workout.outcome === 'completed' && date >= weekStartKey && date <= weekEndKey; }).reduce((total, workout) => total + Number(workout.durationMinutes || 0), 0);
   const calendar = weekdayOrder.map((day, index) => { const parts = addDays(weekStart, index); const scheduled = sessions.find(session => session.day === day); return { day, date: dateKey(parts), dateLabel: formatDate(parts, timezone), status: scheduled ? scheduled.status : 'rest' }; });
-  return { title, timezone, today: { date: todayKey, label: formatDate(today, timezone), session: todaySession }, weekLabel: `${formatDate(weekStart, timezone)} – ${formatDate(addDays(weekStart, 6), timezone)}`, sessions, calendar, summary: { completed: sessions.filter(session => session.status === 'completed').length, planned: sessions.length, trainingMinutes }, adjustment, why: [`Your selected days (${selectedDays.join(', ') || 'none'}) create the week’s rhythm.`, `This plan reflects a ${profile.trainingLevel} starting point and ${profile.equipment.replace('_', ' ')} access.`, adjustment ? 'The current-week miss changes only the remaining sessions; a new week starts clean.' : 'Completed and missed sessions are based on the current date in your saved timezone.'] };
+  const allAdjustments = [adjustment, feedbackAdjustment?.message].filter(Boolean);
+  return { title, timezone, today: { date: todayKey, label: formatDate(today, timezone), session: todaySession }, weekLabel: `${formatDate(weekStart, timezone)} – ${formatDate(addDays(weekStart, 6), timezone)}`, sessions, calendar, summary: { completed: sessions.filter(session => session.status === 'completed').length, planned: sessions.length, trainingMinutes }, adjustment: allAdjustments.length ? allAdjustments.join(' ') : null, feedbackAdjustment, why: [`Your selected days (${selectedDays.join(', ') || 'none'}) create the week’s rhythm.`, `This plan reflects a ${profile.trainingLevel} starting point and ${profile.equipment.replace('_', ' ')} access.`, feedbackAdjustment ? 'Recent workout feedback adjusted only the remaining sessions. Tell us when it feels wrong—this is what the beta is for.' : adjustment ? 'The current-week miss changes only the remaining sessions; a new week starts clean.' : 'Completed and missed sessions are based on the current date in your saved timezone.'] };
 }
 
 module.exports = { generatePlan, localParts, dateKey };

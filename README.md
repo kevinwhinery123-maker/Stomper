@@ -59,6 +59,14 @@ The **Workouts** tab saves completed, partial, and skipped activities. Users can
 
 This is the next data layer the coach needs: a profile says what a person *intends* to do, while workout logs show what they *actually* did. A later rule can safely reduce an upcoming session after several high-effort workouts, or encourage a gradual return after a gap.
 
+The current feedback rules are deliberately conservative and visible in the plan explanation:
+
+- A workout rated 9–10/10 changes the next demanding session to a short recovery session.
+- Two or more skipped workouts shorten the remaining sessions for the current week.
+- Three comfortable completed workouts (effort 5/10 or lower) add one optional, small progression to a future moderate workout.
+
+These are simple rules to validate with beta testers. Feedback from friends should focus on whether the adjustment felt understandable, realistic, and appropriately cautious.
+
 ## Future Garmin and Strava connections
 
 Garmin and Strava should be added after the local workout model has been tested. The app will use a user-authorized connection (OAuth): the user approves access on Garmin or Strava, then Tempo receives only the data they authorize. Imported activities should be shown clearly as imported, remain editable, and never silently replace a user’s own log.
