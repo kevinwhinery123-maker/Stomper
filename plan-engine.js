@@ -24,9 +24,10 @@ function alternativesFor(session) {
     { id: 'hill-run', title: 'Hill repeats', type: 'Running', intensity: 'Moderate', exercises: [['Warm-up jog', '10 min'], ['Hill repeats', '6 × 45 sec'], ['Cool-down', '10 min']] },
     { id: 'walk-run', title: 'Walk-run reset', type: 'Running', intensity: 'Easy', exercises: [['Walk-run intervals', '25 min'], ['Light stretching', '5 min']] }
   ];
-  if (/running/i.test(session.type) && !/strength/i.test(session.type)) return running;
-  if (/strength/i.test(session.type) && !/running/i.test(session.type)) return strength;
-  return [strength[0], running[0], strength[2]];
+  // Keep the complete menu after a swap. Otherwise changing a running workout
+  // to strength would hide all running choices on the next click (and vice versa).
+  // This makes a session freely reversible throughout the week.
+  return [...strength, ...running];
 }
 
 function workoutTemplates(profile) {

@@ -37,4 +37,5 @@ test('uses a saved recommended workout swap for the matching future day', () => 
   assert.equal(friday.title, 'Mobility + core reset');
   assert.equal(friday.customized, true);
   assert.equal(friday.selectedAlternative, 'mobility');
+  assert.deepEqual(friday.alternatives.map(option => option.id), ['full-body', 'upper-body', 'mobility', 'easy-run', 'hill-run', 'walk-run']);
 });
