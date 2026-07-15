@@ -31,3 +31,10 @@ test('adds only a small progression after consistently comfortable workouts', ()
   assert.equal(plan.feedbackAdjustment.type, 'progression');
   assert.ok(plan.sessions.some(session => session.exercises.some(exercise => exercise[0] === 'Gentle progression')));
 });
+test('uses a saved recommended workout swap for the matching future day', () => {
+  const plan = generatePlan(profile, { now: wednesday, overrides: [{ date: '2026-07-17', alternativeId: 'mobility', title: 'Mobility + core reset', type: 'Recovery', intensity: 'Easy', exercises: [['Mobility flow', '15 min']] }] });
+  const friday = plan.sessions.find(session => session.date === '2026-07-17');
+  assert.equal(friday.title, 'Mobility + core reset');
+  assert.equal(friday.customized, true);
+  assert.equal(friday.selectedAlternative, 'mobility');
+});

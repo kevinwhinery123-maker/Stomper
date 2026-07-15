@@ -52,6 +52,11 @@ async function initSchema() {
       average_heartrate REAL, imported_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS strava_activities_user_started_at_idx ON strava_activities(user_id, started_at DESC);
+    CREATE TABLE IF NOT EXISTS plan_overrides (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, session_date DATE NOT NULL,
+      alternative_id TEXT NOT NULL, title TEXT NOT NULL, type TEXT NOT NULL, intensity TEXT NOT NULL,
+      exercises JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (user_id, session_date)
+    );
   `);
 }
 async function getUserById(id) { return toUser((await pool.query(`${userSelect} WHERE u.id = $1`, [id])).rows[0]); }
@@ -90,4 +95,16 @@ async function getActivityDashboard(userId, weekStart, weekEnd, today) {
   const daily = (await pool.query(`SELECT COALESCE(SUM(duration_seconds),0) AS "durationSeconds", AVG(average_heartrate) AS "averageHeartRate", COUNT(*)::int AS "activityCount" FROM strava_activities WHERE user_id = $1 AND started_at >= $2::date AND started_at < ($2::date + INTERVAL '1 day')`, [userId, today])).rows[0];
   return { weekly, daily };
 }
-module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, upsertProfile, markMissedToday, getWorkouts, addWorkout, getCoachMessages, addCoachMessage, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard };
+async function getDashboardRange(userId, start, end) {
+  const workouts = (await pool.query(`SELECT COUNT(*)::int AS "workoutCount", COALESCE(SUM(duration_minutes),0)::int AS "durationMinutes",
+    COUNT(*) FILTER (WHERE type ILIKE '%strength%' OR type ILIKE '%lift%')::int AS "liftingSessions",
+    COUNT(*) FILTER (WHERE type ILIKE '%run%')::int AS "runningSessions"
+    FROM workouts WHERE user_id = $1 AND outcome = 'completed' AND logged_at >= $2::date AND logged_at < ($3::date + INTERVAL '1 day')`, [userId, start, end])).rows[0];
+  const activities = (await pool.query(`SELECT COALESCE(SUM(distance_meters),0) AS "distanceMeters", AVG(average_heartrate) AS "averageHeartRate",
+    COUNT(*)::int AS "activityCount" FROM strava_activities WHERE user_id = $1 AND started_at >= $2::date AND started_at < ($3::date + INTERVAL '1 day')`, [userId, start, end])).rows[0];
+  return { workouts, activities };
+}
+async function getPlanOverrides(userId, weekStart, weekEnd) { return (await pool.query('SELECT session_date::text AS date, alternative_id AS "alternativeId", title, type, intensity, exercises FROM plan_overrides WHERE user_id = $1 AND session_date >= $2::date AND session_date <= $3::date', [userId, weekStart, weekEnd])).rows; }
+async function upsertPlanOverride(userId, date, alternative) { await pool.query(`INSERT INTO plan_overrides (user_id, session_date, alternative_id, title, type, intensity, exercises) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+  ON CONFLICT (user_id, session_date) DO UPDATE SET alternative_id=EXCLUDED.alternative_id, title=EXCLUDED.title, type=EXCLUDED.type, intensity=EXCLUDED.intensity, exercises=EXCLUDED.exercises, updated_at=now()`, [userId, date, alternative.id, alternative.title, alternative.type, alternative.intensity, JSON.stringify(alternative.exercises)]); }
+module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, upsertProfile, markMissedToday, getWorkouts, addWorkout, getCoachMessages, addCoachMessage, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride };

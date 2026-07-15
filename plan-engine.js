@@ -13,6 +13,21 @@ function dateKey({ year, month, day }) { return `${year}-${String(month).padStar
 function addDays(parts, days) { const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days)); return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() }; }
 function formatDate(parts, timezone) { return new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12))); }
 function template(title, type, intensity, exercises) { return { title, type, intensity, exercises }; }
+function alternativesFor(session) {
+  const strength = [
+    { id: 'full-body', title: 'Full-body strength', type: 'Strength', intensity: 'Moderate', exercises: [['Goblet squat or leg press', '3 × 8'], ['Push movement', '3 × 8'], ['Row movement', '3 × 8']] },
+    { id: 'upper-body', title: 'Upper body + core', type: 'Strength', intensity: 'Moderate', exercises: [['Push movement', '3 × 8'], ['Row movement', '3 × 8'], ['Core work', '2 rounds']] },
+    { id: 'mobility', title: 'Mobility + core reset', type: 'Recovery', intensity: 'Easy', exercises: [['Mobility flow', '15 min'], ['Core work', '2 rounds'], ['Easy walk', '10 min']] }
+  ];
+  const running = [
+    { id: 'easy-run', title: 'Easy aerobic run', type: 'Running', intensity: 'Easy', exercises: [['Easy run or walk-run', '30 min'], ['Mobility reset', '8 min']] },
+    { id: 'hill-run', title: 'Hill repeats', type: 'Running', intensity: 'Moderate', exercises: [['Warm-up jog', '10 min'], ['Hill repeats', '6 × 45 sec'], ['Cool-down', '10 min']] },
+    { id: 'walk-run', title: 'Walk-run reset', type: 'Running', intensity: 'Easy', exercises: [['Walk-run intervals', '25 min'], ['Light stretching', '5 min']] }
+  ];
+  if (/running/i.test(session.type) && !/strength/i.test(session.type)) return running;
+  if (/strength/i.test(session.type) && !/running/i.test(session.type)) return strength;
+  return [strength[0], running[0], strength[2]];
+}
 
 function workoutTemplates(profile) {
   const level = profile.trainingLevel;
@@ -68,6 +83,8 @@ function generatePlan(profile, options = {}) {
     session.dateLabel = formatDate(addDays(weekStart, weekdayOrder.indexOf(day)), timezone);
     return session;
   });
+  const overrides = new Map((options.overrides || []).map(override => [override.date, override]));
+  sessions.forEach(session => { const override = overrides.get(session.date); if (override) { session.title = override.title; session.type = override.type; session.intensity = override.intensity; session.exercises = override.exercises; session.customized = true; session.selectedAlternative = override.alternativeId; } });
   const workouts = options.workouts || [];
   const completedDates = new Set(workouts.filter(workout => workout.source === 'plan' && workout.outcome === 'completed').map(workout => dateKey(localParts(new Date(workout.loggedAt), timezone))));
   sessions.forEach(session => { if (completedDates.has(session.date)) session.status = 'completed'; else if (session.date < todayKey) session.status = 'missed'; else if (session.date === todayKey) session.status = 'today'; });
@@ -96,6 +113,7 @@ function generatePlan(profile, options = {}) {
   const trainingMinutes = workouts.filter(workout => { const date = dateKey(localParts(new Date(workout.loggedAt), timezone)); return workout.outcome === 'completed' && date >= weekStartKey && date <= weekEndKey; }).reduce((total, workout) => total + Number(workout.durationMinutes || 0), 0);
   const todayMinutes = workouts.filter(workout => workout.outcome === 'completed' && dateKey(localParts(new Date(workout.loggedAt), timezone)) === todayKey).reduce((total, workout) => total + Number(workout.durationMinutes || 0), 0);
   const calendar = weekdayOrder.map((day, index) => { const parts = addDays(weekStart, index); const scheduled = sessions.find(session => session.day === day); return { day, date: dateKey(parts), dateLabel: formatDate(parts, timezone), status: scheduled ? scheduled.status : 'rest' }; });
+  sessions.forEach(session => { session.alternatives = alternativesFor(session); });
   const allAdjustments = [adjustment, feedbackAdjustment?.message].filter(Boolean);
   return { title, timezone, weekStart: weekStartKey, weekEnd: weekEndKey, today: { date: todayKey, label: formatDate(today, timezone), session: todaySession }, weekLabel: `${formatDate(weekStart, timezone)} – ${formatDate(addDays(weekStart, 6), timezone)}`, sessions, calendar, summary: { completed: sessions.filter(session => session.status === 'completed').length, planned: sessions.length, trainingMinutes, todayMinutes }, adjustment: allAdjustments.length ? allAdjustments.join(' ') : null, feedbackAdjustment, why: [`Your selected days (${selectedDays.join(', ') || 'none'}) create the week’s rhythm.`, `This plan reflects a ${profile.trainingLevel} starting point and ${profile.equipment.replace('_', ' ')} access.`, feedbackAdjustment ? 'Recent workout feedback adjusted only the remaining sessions. Tell us when it feels wrong—this is what the beta is for.' : adjustment ? 'The current-week miss changes only the remaining sessions; a new week starts clean.' : 'Completed and missed sessions are based on the current date in your saved timezone.'] };
 }
