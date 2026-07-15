@@ -1,0 +1,11 @@
+{
+  "name": "tempo-fitness-coach",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Learning-friendly local MVP for the Tempo fitness coach.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  }
+}
