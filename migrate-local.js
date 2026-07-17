@@ -11,7 +11,7 @@ async function migrate() {
   for (const localUser of store.users || []) {
     let user = await db.getUserByEmail(localUser.email);
     if (!user) user = await db.createUser({ id: localUser.id, name: localUser.name, email: localUser.email, passwordHash: localUser.passwordHash, role: localUser.role || 'consumer', createdAt: localUser.createdAt || new Date().toISOString() });
-    if (localUser.profile) await db.upsertProfile(user.id, { ...localUser.profile, aiConsent: Boolean(localUser.profile.aiConsent) });
+    if (localUser.profile) await db.upsertProfile(user.id, { ...localUser.profile, trainingLocation: localUser.profile.trainingLocation || 'both', aiConsent: Boolean(localUser.profile.aiConsent) });
     if (localUser.missedToday) await db.markMissedToday(user.id);
     for (const workout of localUser.workouts || []) {
       const existing = (await db.pool.query('SELECT 1 FROM workouts WHERE id = $1', [workout.id])).rowCount;
