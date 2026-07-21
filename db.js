@@ -136,6 +136,37 @@ async function getUsageOverview() {
     FROM usage_events WHERE occurred_at >= now() - INTERVAL '28 days' GROUP BY event_name ORDER BY count DESC`)).rows;
   return { totals, events, generatedAt: new Date().toISOString() };
 }
+async function getOwnerUserHealth() {
+  return (await pool.query(`WITH workout_stats AS (
+      SELECT user_id, COUNT(*) FILTER (WHERE outcome='completed')::int AS completed,
+        COUNT(*) FILTER (WHERE outcome='completed' AND logged_at >= now() - INTERVAL '7 days')::int AS "completed7d",
+        MAX(logged_at) AS "lastWorkoutAt" FROM workouts GROUP BY user_id
+    ), coach_stats AS (
+      SELECT user_id, COUNT(*)::int AS messages, MAX(created_at) AS "lastCoachAt" FROM coach_messages WHERE role='user' GROUP BY user_id
+    ), usage_stats AS (
+      SELECT user_id, MAX(occurred_at) AS "lastUsageAt" FROM usage_events GROUP BY user_id
+    )
+    SELECT u.name, u.email, u.created_at AS "createdAt", p.goal,
+      (p.user_id IS NOT NULL) AS "profileReady", COALESCE(array_length(p.training_days,1),0)::int AS "preferredDays",
+      COALESCE(w.completed,0)::int AS "completedWorkouts", COALESCE(w."completed7d",0)::int AS "completedWorkouts7d", w."lastWorkoutAt",
+      COALESCE(c.messages,0)::int AS "coachMessages", (s.user_id IS NOT NULL) AS "stravaConnected",
+      GREATEST(u.created_at,w."lastWorkoutAt",c."lastCoachAt",x."lastUsageAt") AS "lastActiveAt"
+    FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN workout_stats w ON w.user_id=u.id
+      LEFT JOIN coach_stats c ON c.user_id=u.id LEFT JOIN usage_stats x ON x.user_id=u.id LEFT JOIN strava_connections s ON s.user_id=u.id
+    ORDER BY "lastActiveAt" DESC NULLS LAST, u.created_at DESC LIMIT 1000`)).rows;
+}
+async function getSystemOverview() {
+  const status = (await pool.query(`SELECT
+    COUNT(*) FILTER (WHERE created_at >= now() - INTERVAL '24 hours')::int AS "errors24h",
+    COUNT(*) FILTER (WHERE created_at >= now() - INTERVAL '7 days')::int AS "errors7d",
+    MAX(created_at) AS "lastErrorAt",
+    (SELECT MAX(occurred_at) FROM usage_events) AS "lastUsageAt",
+    (SELECT MAX(imported_at) FROM strava_activities) AS "lastStravaImportAt",
+    (SELECT COUNT(*)::int FROM strava_activities WHERE imported_at >= now() - INTERVAL '7 days') AS "stravaImports7d"
+    FROM app_errors`)).rows[0];
+  const recentErrors = (await pool.query(`SELECT id, method, path, created_at AS "createdAt" FROM app_errors ORDER BY created_at DESC LIMIT 8`)).rows;
+  return { database: 'operational', ...status, recentErrors, generatedAt: new Date().toISOString() };
+}
 async function upsertProfile(userId, profile) {
   await pool.query(`INSERT INTO profiles (user_id, goal, training_days, session_minutes, training_level, equipment, training_location, timezone, constraints, health_consent, ai_consent)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -226,4 +257,4 @@ async function getFriendActivities(friendIds) { if (!friendIds.length) return []
 async function getDailyCheckin(userId, date) { return (await pool.query('SELECT available_minutes AS "availableMinutes", energy, training_mode AS "trainingMode", setup FROM daily_checkins WHERE user_id = $1 AND checkin_date = $2::date', [userId, date])).rows[0] || null; }
 async function upsertDailyCheckin(userId, date, checkin) { await pool.query(`INSERT INTO daily_checkins (user_id, checkin_date, available_minutes, energy, training_mode, setup) VALUES ($1,$2,$3,$4,$5,$6)
   ON CONFLICT (user_id, checkin_date) DO UPDATE SET available_minutes=EXCLUDED.available_minutes, energy=EXCLUDED.energy, training_mode=EXCLUDED.training_mode, setup=EXCLUDED.setup, updated_at=now()`, [userId, date, checkin.availableMinutes, checkin.energy, checkin.trainingMode || 'auto', checkin.setup || 'auto']); return getDailyCheckin(userId, date); }
-module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, purgeExpiredSessions, deleteUser, healthCheck, recordAppError, recordUsageEvent, getUsageOverview, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, deleteCoachConversation, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin };
+module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, purgeExpiredSessions, deleteUser, healthCheck, recordAppError, recordUsageEvent, getUsageOverview, getOwnerUserHealth, getSystemOverview, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, deleteCoachConversation, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin };
