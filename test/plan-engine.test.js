@@ -69,6 +69,21 @@ test('changes only today to the selected run or no-gym lift setup', () => {
   assert.match(noGymLift.today.session.title, /^Today: Full-body strength/);
   assert.ok(noGymLift.today.session.exercises.some(exercise => exercise[0] === 'Split squat'));
 });
+
+test('builds a mixed strength and aerobic week for sustainable weight management', () => {
+  const plan = generatePlan({ ...profile, goal: 'lose_weight' }, { now: wednesday });
+  const planned = plan.sessions.filter(session => !session.restDay);
+  assert.equal(plan.prescription.label, 'Sustainable weight management');
+  assert.ok(planned.some(session => /strength/i.test(session.type)));
+  assert.ok(planned.some(session => /running|aerobic/i.test(session.type)));
+});
+
+test('builds a balanced general fitness prescription', () => {
+  const plan = generatePlan({ ...profile, goal: 'general_fitness' }, { now: wednesday });
+  assert.equal(plan.prescription.label, 'Healthy fitness');
+  assert.equal(plan.prescription.metrics.length, 4);
+  assert.match(plan.prescription.guidance, /150–300/);
+});
 test('uses logged run distance and comfortable lifting work for conservative progression suggestions', () => {
   const workouts = [
     { outcome: 'completed', perceivedEffort: 5, loggedAt: '2026-07-10T20:00:00Z', details: { running: { distance: 3 } } },

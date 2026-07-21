@@ -2,8 +2,13 @@
 require('dotenv').config();
 const { Pool } = require('pg');
 
-if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is missing. Add it to the .env file.');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const hasLocalConfig = process.env.PGHOST && process.env.PGDATABASE && process.env.PGUSER;
+if (!process.env.DATABASE_URL && !hasLocalConfig) {
+  throw new Error('Database configuration is missing. Add DATABASE_URL or local PG settings to the .env file.');
+}
+const pool = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL })
+  : new Pool();
 
 function toUser(row) {
   if (!row) return null;
@@ -145,6 +150,21 @@ async function getCoachConversation(userId, conversationId) { return (await pool
 async function getLatestCoachConversation(userId) { let conversation = (await pool.query('SELECT id, title, created_at AS "createdAt", updated_at AS "updatedAt" FROM coach_conversations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1', [userId])).rows[0]; if (conversation) return conversation; conversation = await createCoachConversation(userId, 'Earlier coach notes'); await pool.query('UPDATE coach_messages SET conversation_id = $1 WHERE user_id = $2 AND conversation_id IS NULL', [conversation.id, userId]); return conversation; }
 async function getCoachMessages(userId, conversationId) { return (await pool.query('SELECT * FROM (SELECT id, role, content, created_at AS "createdAt" FROM coach_messages WHERE user_id = $1 AND conversation_id = $2 ORDER BY created_at DESC LIMIT 40) recent ORDER BY "createdAt" ASC', [userId, conversationId])).rows; }
 async function addCoachMessage(userId, conversationId, role, content) { const message = { id: require('node:crypto').randomUUID(), role, content, createdAt: new Date().toISOString() }; await pool.query('INSERT INTO coach_messages (id, user_id, conversation_id, role, content, created_at) VALUES ($1,$2,$3,$4,$5,$6)', [message.id, userId, conversationId, message.role, message.content, message.createdAt]); await pool.query("UPDATE coach_conversations SET updated_at = $1, title = CASE WHEN title = 'New conversation' AND $4 = 'user' THEN LEFT($5, 58) ELSE title END WHERE id = $2 AND user_id = $3", [message.createdAt, conversationId, userId, role, content]); return message; }
+async function deleteCoachConversation(userId, conversationId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const owned = await client.query('SELECT id FROM coach_conversations WHERE id = $1 AND user_id = $2 FOR UPDATE', [conversationId, userId]);
+    if (!owned.rowCount) { await client.query('ROLLBACK'); return false; }
+    await client.query('DELETE FROM coach_messages WHERE conversation_id = $1 AND user_id = $2', [conversationId, userId]);
+    await client.query('DELETE FROM coach_conversations WHERE id = $1 AND user_id = $2', [conversationId, userId]);
+    await client.query('COMMIT');
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
+}
 async function getStravaConnection(userId) { const row = (await pool.query('SELECT user_id AS "userId", athlete_id AS "athleteId", access_token AS "accessToken", refresh_token AS "refreshToken", expires_at AS "expiresAt", scope, connected_at AS "connectedAt" FROM strava_connections WHERE user_id = $1', [userId])).rows[0]; return row || null; }
 async function upsertStravaConnection(userId, connection) { await pool.query(`INSERT INTO strava_connections (user_id, athlete_id, access_token, refresh_token, expires_at, scope) VALUES ($1,$2,$3,$4,$5,$6)
   ON CONFLICT (user_id) DO UPDATE SET athlete_id=EXCLUDED.athlete_id, access_token=EXCLUDED.access_token, refresh_token=EXCLUDED.refresh_token, expires_at=EXCLUDED.expires_at, scope=EXCLUDED.scope, connected_at=now()`, [userId, connection.athleteId, connection.accessToken, connection.refreshToken, connection.expiresAt, connection.scope]); }
@@ -185,4 +205,4 @@ async function getFriendActivities(friendIds) { if (!friendIds.length) return []
 async function getDailyCheckin(userId, date) { return (await pool.query('SELECT available_minutes AS "availableMinutes", energy, training_mode AS "trainingMode", setup FROM daily_checkins WHERE user_id = $1 AND checkin_date = $2::date', [userId, date])).rows[0] || null; }
 async function upsertDailyCheckin(userId, date, checkin) { await pool.query(`INSERT INTO daily_checkins (user_id, checkin_date, available_minutes, energy, training_mode, setup) VALUES ($1,$2,$3,$4,$5,$6)
   ON CONFLICT (user_id, checkin_date) DO UPDATE SET available_minutes=EXCLUDED.available_minutes, energy=EXCLUDED.energy, training_mode=EXCLUDED.training_mode, setup=EXCLUDED.setup, updated_at=now()`, [userId, date, checkin.availableMinutes, checkin.energy, checkin.trainingMode || 'auto', checkin.setup || 'auto']); return getDailyCheckin(userId, date); }
-module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, purgeExpiredSessions, deleteUser, healthCheck, recordAppError, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin };
+module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, purgeExpiredSessions, deleteUser, healthCheck, recordAppError, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, deleteCoachConversation, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin };
