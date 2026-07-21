@@ -41,6 +41,7 @@ async function createCoachReply({ user, plan, workouts, messages, message, actio
     upcomingSessions: plan.sessions.filter(session => session.status === 'upcoming').slice(0, 3).map(session => ({ date: session.date, title: session.title, type: session.type, minutes: session.minutes, intensity: session.intensity })),
     planAdjustment: plan.adjustment || 'None', actionCompleted: actionSummary || 'No Tempo record was changed for this message.',
     fitnessSummary: plan.fitnessSummary || null,
+    weeklyCoachSummary: plan.weeklyCoachSummary || null,
     recentWorkouts: workouts.slice(0, 8).map(workout => ({ date: String(workout.loggedAt).slice(0, 10), title: workout.title, type: workout.type, outcome: workout.outcome, minutes: workout.durationMinutes, effort: workout.perceivedEffort, running: workout.details?.running || null, lifts: workout.details?.lifts || [] })),
     recentConversation: (messages || []).slice(-10).map(item => ({ role: item.role, content: item.content }))
   };
