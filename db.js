@@ -2,8 +2,13 @@
 require('dotenv').config();
 const { Pool } = require('pg');
 
-if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is missing. Add it to the .env file.');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const hasLocalConfig = process.env.PGHOST && process.env.PGDATABASE && process.env.PGUSER;
+if (!process.env.DATABASE_URL && !hasLocalConfig) {
+  throw new Error('Database configuration is missing. Add DATABASE_URL or local PG settings to the .env file.');
+}
+const pool = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL })
+  : new Pool();
 
 function toUser(row) {
   if (!row) return null;
@@ -95,6 +100,12 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS app_errors_created_at_idx ON app_errors(created_at DESC);
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_name TEXT NOT NULL, occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS usage_events_name_time_idx ON usage_events(event_name, occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS usage_events_user_time_idx ON usage_events(user_id, occurred_at DESC);
   `);
 }
 async function getUserById(id) { return toUser((await pool.query(`${userSelect} WHERE u.id = $1`, [id])).rows[0]); }
@@ -110,6 +121,52 @@ async function purgeExpiredSessions() { await pool.query('DELETE FROM sessions W
 async function deleteUser(userId) { await pool.query('DELETE FROM users WHERE id = $1', [userId]); }
 async function healthCheck() { await pool.query('SELECT 1'); }
 async function recordAppError(event) { await pool.query('INSERT INTO app_errors (id, method, path, message) VALUES ($1,$2,$3,$4)', [event.id, event.method, event.path, event.message]); }
+async function recordUsageEvent(userId, eventName) { await pool.query('INSERT INTO usage_events (id, user_id, event_name) VALUES ($1,$2,$3)', [require('node:crypto').randomUUID(), userId, eventName]); }
+async function getUsageOverview() {
+  const totals = (await pool.query(`SELECT
+    (SELECT COUNT(*)::int FROM users) AS "totalUsers",
+    (SELECT COUNT(*)::int FROM users WHERE created_at >= now() - INTERVAL '7 days') AS "newUsers7d",
+    (SELECT COUNT(*)::int FROM profiles) AS "profilesCompleted",
+    (SELECT COUNT(DISTINCT user_id)::int FROM workouts) AS "usersWithWorkout",
+    (SELECT COUNT(*)::int FROM (SELECT user_id FROM workouts WHERE outcome='completed' GROUP BY user_id HAVING COUNT(*) >= 2) active) AS "usersWithTwoWorkouts",
+    (SELECT COUNT(DISTINCT user_id)::int FROM coach_messages WHERE role='user') AS "coachUsers",
+    (SELECT COUNT(*)::int FROM strava_connections) AS "stravaConnections",
+    (SELECT COUNT(DISTINCT user_id)::int FROM usage_events WHERE occurred_at >= now() - INTERVAL '7 days') AS "activeUsers7d"`)).rows[0];
+  const events = (await pool.query(`SELECT event_name AS "eventName", COUNT(*)::int AS count, COUNT(DISTINCT user_id)::int AS users
+    FROM usage_events WHERE occurred_at >= now() - INTERVAL '28 days' GROUP BY event_name ORDER BY count DESC`)).rows;
+  return { totals, events, generatedAt: new Date().toISOString() };
+}
+async function getOwnerUserHealth() {
+  return (await pool.query(`WITH workout_stats AS (
+      SELECT user_id, COUNT(*) FILTER (WHERE outcome='completed')::int AS completed,
+        COUNT(*) FILTER (WHERE outcome='completed' AND logged_at >= now() - INTERVAL '7 days')::int AS "completed7d",
+        MAX(logged_at) AS "lastWorkoutAt" FROM workouts GROUP BY user_id
+    ), coach_stats AS (
+      SELECT user_id, COUNT(*)::int AS messages, MAX(created_at) AS "lastCoachAt" FROM coach_messages WHERE role='user' GROUP BY user_id
+    ), usage_stats AS (
+      SELECT user_id, MAX(occurred_at) AS "lastUsageAt" FROM usage_events GROUP BY user_id
+    )
+    SELECT u.name, u.email, u.created_at AS "createdAt", p.goal,
+      (p.user_id IS NOT NULL) AS "profileReady", COALESCE(array_length(p.training_days,1),0)::int AS "preferredDays",
+      COALESCE(w.completed,0)::int AS "completedWorkouts", COALESCE(w."completed7d",0)::int AS "completedWorkouts7d", w."lastWorkoutAt",
+      COALESCE(c.messages,0)::int AS "coachMessages", (s.user_id IS NOT NULL) AS "stravaConnected",
+      GREATEST(u.created_at,w."lastWorkoutAt",c."lastCoachAt",x."lastUsageAt") AS "lastActiveAt"
+    FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN workout_stats w ON w.user_id=u.id
+      LEFT JOIN coach_stats c ON c.user_id=u.id LEFT JOIN usage_stats x ON x.user_id=u.id LEFT JOIN strava_connections s ON s.user_id=u.id
+    ORDER BY "lastActiveAt" DESC NULLS LAST, u.created_at DESC LIMIT 1000`)).rows;
+}
+async function getSystemOverview() {
+  const status = (await pool.query(`SELECT
+    COUNT(*) FILTER (WHERE created_at >= now() - INTERVAL '24 hours')::int AS "errors24h",
+    COUNT(*) FILTER (WHERE created_at >= now() - INTERVAL '7 days')::int AS "errors7d",
+    MAX(created_at) AS "lastErrorAt",
+    (SELECT MAX(occurred_at) FROM usage_events) AS "lastUsageAt",
+    (SELECT MAX(imported_at) FROM strava_activities) AS "lastStravaImportAt",
+    (SELECT COUNT(*)::int FROM strava_activities WHERE imported_at >= now() - INTERVAL '7 days') AS "stravaImports7d"
+    FROM app_errors`)).rows[0];
+  const recentErrors = (await pool.query(`SELECT id, method, path, created_at AS "createdAt" FROM app_errors ORDER BY created_at DESC LIMIT 8`)).rows;
+  return { database: 'operational', ...status, recentErrors, generatedAt: new Date().toISOString() };
+}
 async function upsertProfile(userId, profile) {
   await pool.query(`INSERT INTO profiles (user_id, goal, training_days, session_minutes, training_level, equipment, training_location, timezone, constraints, health_consent, ai_consent)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -145,6 +202,21 @@ async function getCoachConversation(userId, conversationId) { return (await pool
 async function getLatestCoachConversation(userId) { let conversation = (await pool.query('SELECT id, title, created_at AS "createdAt", updated_at AS "updatedAt" FROM coach_conversations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1', [userId])).rows[0]; if (conversation) return conversation; conversation = await createCoachConversation(userId, 'Earlier coach notes'); await pool.query('UPDATE coach_messages SET conversation_id = $1 WHERE user_id = $2 AND conversation_id IS NULL', [conversation.id, userId]); return conversation; }
 async function getCoachMessages(userId, conversationId) { return (await pool.query('SELECT * FROM (SELECT id, role, content, created_at AS "createdAt" FROM coach_messages WHERE user_id = $1 AND conversation_id = $2 ORDER BY created_at DESC LIMIT 40) recent ORDER BY "createdAt" ASC', [userId, conversationId])).rows; }
 async function addCoachMessage(userId, conversationId, role, content) { const message = { id: require('node:crypto').randomUUID(), role, content, createdAt: new Date().toISOString() }; await pool.query('INSERT INTO coach_messages (id, user_id, conversation_id, role, content, created_at) VALUES ($1,$2,$3,$4,$5,$6)', [message.id, userId, conversationId, message.role, message.content, message.createdAt]); await pool.query("UPDATE coach_conversations SET updated_at = $1, title = CASE WHEN title = 'New conversation' AND $4 = 'user' THEN LEFT($5, 58) ELSE title END WHERE id = $2 AND user_id = $3", [message.createdAt, conversationId, userId, role, content]); return message; }
+async function deleteCoachConversation(userId, conversationId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const owned = await client.query('SELECT id FROM coach_conversations WHERE id = $1 AND user_id = $2 FOR UPDATE', [conversationId, userId]);
+    if (!owned.rowCount) { await client.query('ROLLBACK'); return false; }
+    await client.query('DELETE FROM coach_messages WHERE conversation_id = $1 AND user_id = $2', [conversationId, userId]);
+    await client.query('DELETE FROM coach_conversations WHERE id = $1 AND user_id = $2', [conversationId, userId]);
+    await client.query('COMMIT');
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
+}
 async function getStravaConnection(userId) { const row = (await pool.query('SELECT user_id AS "userId", athlete_id AS "athleteId", access_token AS "accessToken", refresh_token AS "refreshToken", expires_at AS "expiresAt", scope, connected_at AS "connectedAt" FROM strava_connections WHERE user_id = $1', [userId])).rows[0]; return row || null; }
 async function upsertStravaConnection(userId, connection) { await pool.query(`INSERT INTO strava_connections (user_id, athlete_id, access_token, refresh_token, expires_at, scope) VALUES ($1,$2,$3,$4,$5,$6)
   ON CONFLICT (user_id) DO UPDATE SET athlete_id=EXCLUDED.athlete_id, access_token=EXCLUDED.access_token, refresh_token=EXCLUDED.refresh_token, expires_at=EXCLUDED.expires_at, scope=EXCLUDED.scope, connected_at=now()`, [userId, connection.athleteId, connection.accessToken, connection.refreshToken, connection.expiresAt, connection.scope]); }
@@ -185,4 +257,4 @@ async function getFriendActivities(friendIds) { if (!friendIds.length) return []
 async function getDailyCheckin(userId, date) { return (await pool.query('SELECT available_minutes AS "availableMinutes", energy, training_mode AS "trainingMode", setup FROM daily_checkins WHERE user_id = $1 AND checkin_date = $2::date', [userId, date])).rows[0] || null; }
 async function upsertDailyCheckin(userId, date, checkin) { await pool.query(`INSERT INTO daily_checkins (user_id, checkin_date, available_minutes, energy, training_mode, setup) VALUES ($1,$2,$3,$4,$5,$6)
   ON CONFLICT (user_id, checkin_date) DO UPDATE SET available_minutes=EXCLUDED.available_minutes, energy=EXCLUDED.energy, training_mode=EXCLUDED.training_mode, setup=EXCLUDED.setup, updated_at=now()`, [userId, date, checkin.availableMinutes, checkin.energy, checkin.trainingMode || 'auto', checkin.setup || 'auto']); return getDailyCheckin(userId, date); }
-module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, purgeExpiredSessions, deleteUser, healthCheck, recordAppError, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin };
+module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, purgeExpiredSessions, deleteUser, healthCheck, recordAppError, recordUsageEvent, getUsageOverview, getOwnerUserHealth, getSystemOverview, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, deleteCoachConversation, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin };
