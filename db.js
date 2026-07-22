@@ -101,6 +101,13 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions(expires_at);
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE, expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS password_reset_tokens_user_idx ON password_reset_tokens(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS password_reset_tokens_expiry_idx ON password_reset_tokens(expires_at);
     CREATE TABLE IF NOT EXISTS app_errors (
       id UUID PRIMARY KEY, method TEXT NOT NULL, path TEXT NOT NULL, message TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -129,7 +136,11 @@ async function createUser(user) {
 async function createSession(id, userId, expiresAt) { await pool.query('INSERT INTO sessions (id, user_id, expires_at) VALUES ($1,$2,$3)', [id, userId, expiresAt]); }
 async function getSessionUserId(id) { if (!id) return null; const result = await pool.query('SELECT user_id AS "userId" FROM sessions WHERE id = $1 AND expires_at > now()', [id]); return result.rows[0]?.userId || null; }
 async function deleteSession(id) { if (id) await pool.query('DELETE FROM sessions WHERE id = $1', [id]); }
+async function deleteUserSessions(userId) { await pool.query('DELETE FROM sessions WHERE user_id = $1', [userId]); }
 async function purgeExpiredSessions() { await pool.query('DELETE FROM sessions WHERE expires_at <= now()'); }
+async function createPasswordResetToken(userId, tokenHash, expiresAt) { await pool.query('DELETE FROM password_reset_tokens WHERE user_id = $1 OR expires_at <= now() OR used_at IS NOT NULL', [userId]); await pool.query('INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at) VALUES ($1,$2,$3,$4)', [require('node:crypto').randomUUID(), userId, tokenHash, expiresAt]); }
+async function consumePasswordResetToken(tokenHash) { const result = await pool.query(`UPDATE password_reset_tokens SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() RETURNING user_id AS "userId"`, [tokenHash]); return result.rows[0]?.userId || null; }
+async function updateUserPassword(userId, passwordHash) { await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [userId, passwordHash]); }
 async function deleteUser(userId) { await pool.query('DELETE FROM users WHERE id = $1', [userId]); }
 async function healthCheck() { await pool.query('SELECT 1'); }
 async function recordAppError(event) { await pool.query('INSERT INTO app_errors (id, method, path, message) VALUES ($1,$2,$3,$4)', [event.id, event.method, event.path, event.message]); }
@@ -283,4 +294,4 @@ async function upsertTrainingWheelSnapshot(userId, wheel) {
     SET week_end=EXCLUDED.week_end, snapshot=EXCLUDED.snapshot, updated_at=now()`,
   [userId, wheel.weekStart, wheel.weekEnd, JSON.stringify(wheel)]);
 }
-module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, purgeExpiredSessions, deleteUser, healthCheck, recordAppError, recordUsageEvent, getUsageOverview, getOwnerUserHealth, getSystemOverview, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, deleteCoachConversation, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin, getDailyReset, upsertDailyReset, getPreviousTrainingWheelSnapshot, upsertTrainingWheelSnapshot };
+module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, deleteUserSessions, purgeExpiredSessions, createPasswordResetToken, consumePasswordResetToken, updateUserPassword, deleteUser, healthCheck, recordAppError, recordUsageEvent, getUsageOverview, getOwnerUserHealth, getSystemOverview, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, deleteCoachConversation, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin, getDailyReset, upsertDailyReset, getPreviousTrainingWheelSnapshot, upsertTrainingWheelSnapshot };

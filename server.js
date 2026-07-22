@@ -21,9 +21,17 @@ const stravaStates = new Map();
 const SESSION_DAYS = 14;
 const isProduction = process.env.NODE_ENV === 'production';
 const rateWindows = new Map();
+const PASSWORD_RESET_MINUTES = 60;
 
 function passwordHash(password, salt = crypto.randomBytes(16).toString('hex')) { return `${salt}:${crypto.scryptSync(password, salt, 64).toString('hex')}`; }
 function passwordMatches(password, stored) { const [salt, savedHash] = stored.split(':'); return crypto.timingSafeEqual(Buffer.from(savedHash, 'hex'), Buffer.from(passwordHash(password, salt).split(':')[1], 'hex')); }
+function resetTokenHash(token) { return crypto.createHash('sha256').update(token).digest('hex'); }
+function passwordResetBaseUrl() { const configured = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/+$/, ''); return configured || (!isProduction ? `http://localhost:${PORT}` : ''); }
+function passwordResetEmailReady() { return Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL && passwordResetBaseUrl()); }
+async function sendPasswordResetEmail(email, resetUrl) {
+  const result = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'User-Agent': 'Tempo-password-reset/1.0' }, body: JSON.stringify({ from: process.env.RESEND_FROM_EMAIL, to: [email], subject: 'Reset your Tempo password', text: `We received a request to reset your Tempo password. Use this link within ${PASSWORD_RESET_MINUTES} minutes: ${resetUrl}\n\nIf you did not request this, you can ignore this email.`, html: `<p>We received a request to reset your Tempo password.</p><p><a href="${resetUrl}">Reset your Tempo password</a></p><p>This link expires in ${PASSWORD_RESET_MINUTES} minutes. If you did not request it, you can ignore this email.</p>` }) });
+  if (!result.ok) { const detail = await result.text(); throw new Error(`Password reset email could not be sent: ${detail.slice(0, 300)}`); }
+}
 function isOwner(user) { return Boolean(user && (user.role === 'admin' || ownerEmails.has(String(user.email || '').toLowerCase()))); }
 function publicUser(user) { const { passwordHash: _passwordHash, ...safeUser } = user; return { ...safeUser, isOwner: isOwner(user) }; }
 function parseCookies(request) { return Object.fromEntries((request.headers.cookie || '').split(';').filter(Boolean).map(item => { const index = item.indexOf('='); return [item.slice(0, index).trim(), decodeURIComponent(item.slice(index + 1))]; })); }
@@ -132,6 +140,34 @@ async function handleApi(request, response, url) {
     const user = await db.createUser({ id: crypto.randomUUID(), name: name.trim(), email: normalizedEmail, passwordHash: passwordHash(password), role: 'consumer', createdAt: new Date().toISOString() }); const sessionId = await createUserSession(user.id); await trackUsage(user.id, 'account_created'); return json(response, 201, { user: publicUser(user) }, sessionCookie(sessionId));
   }
   if (request.method === 'POST' && url.pathname === '/api/auth/login') { if (!allowRequest(request, response, 'login', 10, 900000)) return; const { email = '', password = '' } = await readJson(request); const user = await db.getUserByEmail(email.trim().toLowerCase()); if (!user || !passwordMatches(password, user.passwordHash)) return json(response, 401, { error: 'Email or password is incorrect.' }); const sessionId = await createUserSession(user.id); await trackUsage(user.id, 'signed_in'); return json(response, 200, { user: publicUser(user) }, sessionCookie(sessionId)); }
+  if (request.method === 'POST' && url.pathname === '/api/auth/forgot-password') {
+    if (!allowRequest(request, response, 'forgot-password', 5, 3600000)) return;
+    const email = String((await readJson(request)).email || '').trim().toLowerCase();
+    const user = /^\S+@\S+\.\S+$/.test(email) ? await db.getUserByEmail(email) : null;
+    if (user) {
+      const token = crypto.randomBytes(32).toString('hex'), baseUrl = passwordResetBaseUrl(), resetUrl = `${baseUrl}/?reset=${token}`;
+      if (passwordResetEmailReady()) {
+        await db.createPasswordResetToken(user.id, resetTokenHash(token), new Date(Date.now() + PASSWORD_RESET_MINUTES * 60000));
+        try { await sendPasswordResetEmail(user.email, resetUrl); } catch (error) { console.error(error.message); }
+      } else if (!isProduction && baseUrl) {
+        await db.createPasswordResetToken(user.id, resetTokenHash(token), new Date(Date.now() + PASSWORD_RESET_MINUTES * 60000));
+        console.log(`Local Tempo password reset link for ${user.email}: ${resetUrl}`);
+      }
+    }
+    return json(response, 200, { ok: true, message: 'If an account uses that email, a password-reset link will arrive shortly.' });
+  }
+  if (request.method === 'POST' && url.pathname === '/api/auth/reset-password') {
+    if (!allowRequest(request, response, 'reset-password', 10, 3600000)) return;
+    const { token = '', password = '' } = await readJson(request);
+    if (!/^[a-f0-9]{64}$/i.test(String(token)) || String(password).length < 10) return json(response, 400, { error: 'Use a valid reset link and a password with at least 10 characters.' });
+    const userId = await db.consumePasswordResetToken(resetTokenHash(String(token)));
+    if (!userId) return json(response, 400, { error: 'That reset link is invalid or expired. Request a new one.' });
+    await db.updateUserPassword(userId, passwordHash(String(password)));
+    await db.deleteUserSessions(userId);
+    const user = await db.getUserById(userId), sessionId = await createUserSession(userId);
+    await trackUsage(userId, 'password_reset');
+    return json(response, 200, { user: publicUser(user) }, sessionCookie(sessionId));
+  }
   if (request.method === 'POST' && url.pathname === '/api/auth/logout') { await db.deleteSession(parseCookies(request).tempo_session); return json(response, 200, { ok: true }, clearSessionCookie()); }
   if (request.method === 'DELETE' && url.pathname === '/api/account') { const user = await requireUser(request, response); if (!user) return; await db.deleteUser(user.id); return json(response, 200, { ok: true }, clearSessionCookie()); }
   if (request.method === 'PUT' && url.pathname === '/api/profile') { const user = await requireUser(request, response); if (!user) return; const submitted = await readJson(request); const profile = { ...submitted, baseline: normalizeBaseline(submitted.baseline), trainingLocation: ['indoor', 'outdoor', 'both'].includes(submitted.trainingLocation) ? submitted.trainingLocation : 'both' }, problem = validateProfile(profile); if (problem) return json(response, 400, { error: problem }); const saved = await db.upsertProfile(user.id, { ...profile, sessionMinutes: Number(profile.sessionMinutes) || 45, constraints: profile.healthConsent ? String(profile.constraints || '').slice(0, 1000) : '' }); return json(response, 200, { user: publicUser(saved) }); }
