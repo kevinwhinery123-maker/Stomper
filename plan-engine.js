@@ -46,30 +46,47 @@ function buildTrainingSignals(profile, workouts, now, timezone) {
   lifts.forEach(record => record.entries.sort((a, b) => b.date.localeCompare(a.date)));
   currentMiles = roundMiles(currentMiles); previousMiles = roundMiles(previousMiles);
   const hardRecent = recentEfforts.some(effort => effort >= 8);
-  const baselineMiles = currentMiles || previousMiles;
+  const declaredBaseline = profile.baseline || {};
+  const declaredWeeklyMiles = Math.max(0, Number(declaredBaseline.weeklyRunMiles) || 0);
+  const baselineMiles = currentMiles || previousMiles || declaredWeeklyMiles;
   let suggestedMiles = baselineMiles, runProgression = 'none';
-  if (baselineMiles && currentRunCount >= 2 && !hardRecent) { suggestedMiles = roundMiles(Math.min(baselineMiles * 1.05, baselineMiles + 0.5)); runProgression = suggestedMiles > baselineMiles ? 'small-increase' : 'repeat'; }
-  else if (baselineMiles) runProgression = hardRecent ? 'repeat-after-hard-week' : 'repeat';
-  return { recentStart, currentMiles, previousMiles, currentRunCount, suggestedMiles, runProgression, hardRecent, lifts: [...lifts.values()] };
+  if (baselineMiles && currentRunCount >= 2 && !hardRecent) { suggestedMiles = roundMiles(baselineMiles * 1.10); runProgression = suggestedMiles > baselineMiles ? 'small-increase' : 'repeat'; }
+  else if (baselineMiles) runProgression = hardRecent ? 'repeat-after-hard-week' : declaredWeeklyMiles && !currentMiles && !previousMiles ? 'declared-baseline' : 'repeat';
+  return { recentStart, currentMiles, previousMiles, currentRunCount, suggestedMiles, runProgression, hardRecent, declaredBaseline, baselineSource: currentMiles || previousMiles ? 'logged' : declaredWeeklyMiles ? 'user' : 'none', lifts: [...lifts.values()] };
 }
 
 function findLift(signals, aliases) { return signals.lifts.find(record => aliases.some(alias => record.name.toLowerCase().includes(alias))); }
-function loadPrescription(signals, aliases, fallbackName, sets, reps) {
+function liftIncrement(name, weight, trainingLevel) {
+  const lowerBody = /squat|deadlift|leg press|hip thrust|lunge|split squat/i.test(name);
+  const rate = trainingLevel === 'new' ? .03 : trainingLevel === 'advanced' ? .01 : .015;
+  const roundingStep = trainingLevel === 'advanced' ? 1 : 2.5;
+  const percentageIncrement = Math.max(roundingStep, Math.round((weight * rate) / roundingStep) * roundingStep);
+  return Math.min(lowerBody ? 10 : 5, percentageIncrement);
+}
+function loadPrescription(profile, signals, aliases, fallbackName, sets, reps) {
   const record = findLift(signals, aliases);
-  const latest = record?.entries[0];
+  const latest = record?.entries[0], previous = record?.entries[1];
   if (!latest?.weight) return [record?.name || fallbackName, `${sets} × ${reps}`];
-  const readyToProgress = record.entries.length >= 2 && !signals.hardRecent && latest.effort !== null && latest.effort <= 6 && numericWeight(latest.weight) !== null;
-  if (readyToProgress) return [record.name, `${sets} × ${reps} @ ${formatWeight(numericWeight(latest.weight) + 5)} · optional +5 lb`];
+  const latestWeight = numericWeight(latest.weight), previousWeight = numericWeight(previous?.weight);
+  const repTop = Math.max(...String(reps).match(/\d+/g).map(Number));
+  const repeatedTopRange = previous && latest.reps >= repTop && previous.reps >= repTop && latestWeight !== null && previousWeight !== null && Math.abs(latestWeight - previousWeight) < .01;
+  const effortSupportsProgress = latest.effort !== null && previous?.effort !== null && latest.effort <= 7 && previous.effort <= 7;
+  const readyToProgress = repeatedTopRange && effortSupportsProgress && !signals.hardRecent;
+  if (readyToProgress) { const increment = liftIncrement(record.name, latestWeight, profile.trainingLevel); return [record.name, `${sets} × ${reps} @ ${formatWeight(latestWeight + increment)} · optional +${increment} lb after two strong sessions`]; }
   return [record.name, `${sets} × ${reps} @ ${formatWeight(latest.weight)} · repeat last load`];
 }
 function strengthSetup(profile, signals) {
-  const sets = profile.trainingLevel === 'new' ? 2 : profile.trainingLevel === 'advanced' ? 4 : 3;
+  const declaredSets = Math.max(0, Number(signals.declaredBaseline?.weeklyLiftSets) || 0);
+  const sets = declaredSets ? declaredSets < 12 ? 2 : declaredSets < 32 ? 3 : 4 : profile.trainingLevel === 'new' ? 2 : profile.trainingLevel === 'advanced' ? 4 : 3;
   const squatName = profile.equipment === 'bodyweight' ? 'Split squat' : profile.equipment === 'home_gym' ? 'Goblet squat' : 'Back squat';
-  return { sets, reps: profile.trainingLevel === 'advanced' ? '6–8' : '8–10', squat: loadPrescription(signals, ['squat', 'leg press'], squatName, sets, profile.trainingLevel === 'advanced' ? '6–8' : '8–10'), hinge: loadPrescription(signals, ['deadlift', 'hip thrust', 'hinge'], 'Romanian deadlift', sets, '8–10'), push: loadPrescription(signals, ['bench', 'push-up', 'press'], 'Bench press or push-up', sets, '8–10'), pull: loadPrescription(signals, ['row', 'pull-down', 'pulldown'], 'Row movement', sets, '8–12') };
+  return { sets, reps: profile.trainingLevel === 'advanced' ? '6–8' : '8–10', squat: loadPrescription(profile, signals, ['squat', 'leg press'], squatName, sets, profile.trainingLevel === 'advanced' ? '6–8' : '8–10'), hinge: loadPrescription(profile, signals, ['deadlift', 'hip thrust', 'hinge'], 'Romanian deadlift', sets, '8–10'), push: loadPrescription(profile, signals, ['bench', 'push-up', 'press'], 'Bench press or push-up', sets, '8–10'), pull: loadPrescription(profile, signals, ['row', 'pull-down', 'pulldown'], 'Row movement', sets, '8–12') };
 }
 function runBlock(label, minutes, share, signals, detail) {
   if (!signals.suggestedMiles) return [label, `${minutes} min${detail ? ` · ${detail}` : ''}`];
-  return [label, `${Math.max(0.5, roundMiles(signals.suggestedMiles * share))} mi${detail ? ` · ${detail}` : ''}`];
+  let distance = Math.max(0.5, roundMiles(signals.suggestedMiles * share));
+  const longest = Math.max(0, Number(signals.declaredBaseline?.longestRunMiles) || 0);
+  if (longest && /long/i.test(label)) distance = Math.min(distance, Math.max(0.5, roundMiles(longest * 1.10)));
+  return [label, `${distance} mi${detail ? ` · ${detail}` : ''}`];
 }
 function workoutTemplates(profile, signals, trainingDays) {
   const minutes = Math.max(20, Math.min(Number(profile.sessionMinutes) || 45, 120));
@@ -183,11 +200,12 @@ function generatePlan(profile, options = {}) {
   const trainingMinutes = workouts.filter(workout => { const date = workoutDate(workout, timezone); return workout.outcome === 'completed' && date && date >= weekStartKey && date <= weekEndKey; }).reduce((total, workout) => total + Number(workout.durationMinutes || 0), 0);
   const todayMinutes = workouts.filter(workout => workout.outcome === 'completed' && workoutDate(workout, timezone) === todayKey).reduce((total, workout) => total + Number(workout.durationMinutes || 0), 0);
   const allAdjustments = [adjustment, feedbackAdjustment?.message].filter(Boolean);
-  const dataRead = signals.currentMiles || signals.lifts.length ? `Tempo read ${signals.currentMiles ? `${signals.currentMiles} recent run miles` : ''}${signals.currentMiles && signals.lifts.length ? ' and ' : ''}${signals.lifts.length ? `${signals.lifts.reduce((total, lift) => total + lift.sets, 0)} logged lifting sets` : ''}.` : 'Log runs with mileage and lifting sets/weight to unlock data-based progression.';
+  const hasDeclaredBaseline = Object.values(signals.declaredBaseline || {}).some(value => Number(value) > 0);
+  const dataRead = signals.currentMiles || signals.lifts.length ? `Tempo read ${signals.currentMiles ? `${signals.currentMiles} recent run miles` : ''}${signals.currentMiles && signals.lifts.length ? ' and ' : ''}${signals.lifts.length ? `${signals.lifts.reduce((total, lift) => total + lift.sets, 0)} logged lifting sets` : ''}. Logged work takes priority over your saved starting baseline.` : hasDeclaredBaseline ? 'Tempo is using your saved starting baseline until enough completed workouts are logged.' : 'Add a starting baseline or log runs with mileage and lifting sets/weight to unlock data-based progression.';
   const runNote = signals.suggestedMiles ? `This week’s running target stays near ${signals.suggestedMiles} miles${signals.runProgression === 'small-increase' ? ', a small increase after consistent comfortable running.' : ', with no automatic mileage jump after a hard or inconsistent week.'}` : 'Tempo will use time-based runs until enough recent mileage is logged.';
   const titles = { build_strength: 'Build muscle and strength with repeatable progress.', both: 'Build strength and endurance in the same week.', run_stronger: 'Build running mileage without rushing the process.', lose_weight: 'Build a sustainable week for weight management.', general_fitness: 'Build fitness you can maintain.' };
   const prescription = buildPrescription(profile, sessions, signals);
-  return { title: titles[profile.goal] || titles.both, prescription, timezone, weekStart: weekStartKey, weekEnd: weekEndKey, today: { date: todayKey, label: formatDate(today, timezone), session: sessions.find(session => session.date === todayKey) || null }, weekLabel: `${formatDate(weekStart, timezone)} – ${formatDate(addDays(weekStart, 6), timezone)}`, sessions, calendar: sessions.map(session => ({ day: session.day, date: session.date, dateLabel: session.dateLabel, status: session.status })), summary: { completed: sessions.filter(session => !session.restDay && session.status === 'completed').length, planned: sessions.filter(session => !session.restDay).length, trainingMinutes, todayMinutes }, adjustment: allAdjustments.length ? allAdjustments.join(' ') : null, feedbackAdjustment, dataSignals: signals, why: [prescription.guidance, dataRead, profile.goal === 'run_stronger' || profile.goal === 'both' ? runNote : 'Tempo increases work only after repeated comfortable sessions and keeps recovery visible in the plan.'] };
+  return { title: titles[profile.goal] || titles.both, prescription, baseline: profile.baseline || {}, timezone, weekStart: weekStartKey, weekEnd: weekEndKey, today: { date: todayKey, label: formatDate(today, timezone), session: sessions.find(session => session.date === todayKey) || null }, weekLabel: `${formatDate(weekStart, timezone)} – ${formatDate(addDays(weekStart, 6), timezone)}`, sessions, calendar: sessions.map(session => ({ day: session.day, date: session.date, dateLabel: session.dateLabel, status: session.status })), summary: { completed: sessions.filter(session => !session.restDay && session.status === 'completed').length, planned: sessions.filter(session => !session.restDay).length, trainingMinutes, todayMinutes }, adjustment: allAdjustments.length ? allAdjustments.join(' ') : null, feedbackAdjustment, dataSignals: signals, why: [prescription.guidance, dataRead, profile.goal === 'run_stronger' || profile.goal === 'both' ? runNote : 'Tempo increases work only after repeated comfortable sessions and keeps recovery visible in the plan.'] };
 }
 
 module.exports = { generatePlan, localParts, dateKey };

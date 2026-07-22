@@ -88,11 +88,52 @@ test('uses logged run distance and comfortable lifting work for conservative pro
   const workouts = [
     { outcome: 'completed', perceivedEffort: 5, loggedAt: '2026-07-10T20:00:00Z', details: { running: { distance: 3 } } },
     { outcome: 'completed', perceivedEffort: 5, loggedAt: '2026-07-12T20:00:00Z', details: { running: { distance: 3 } } },
-    { outcome: 'completed', perceivedEffort: 5, loggedAt: '2026-07-13T20:00:00Z', details: { lifts: [{ exercise: 'Back squat', sets: 3, reps: 8, weight: '135 lb' }] } },
-    { outcome: 'completed', perceivedEffort: 5, loggedAt: '2026-07-14T20:00:00Z', details: { lifts: [{ exercise: 'Back squat', sets: 3, reps: 8, weight: '135 lb' }] } }
+    { outcome: 'completed', perceivedEffort: 5, loggedAt: '2026-07-13T20:00:00Z', details: { lifts: [{ exercise: 'Back squat', sets: 3, reps: 10, weight: '135 lb' }] } },
+    { outcome: 'completed', perceivedEffort: 5, loggedAt: '2026-07-14T20:00:00Z', details: { lifts: [{ exercise: 'Back squat', sets: 3, reps: 10, weight: '135 lb' }] } }
   ];
   const plan = generatePlan(profile, { now: wednesday, workouts });
   assert.equal(plan.dataSignals.currentMiles, 6);
   assert.equal(plan.dataSignals.runProgression, 'small-increase');
-  assert.ok(plan.sessions.some(session => session.exercises.some(exercise => /optional \+5 lb/.test(exercise[1]))));
+  assert.ok(plan.sessions.some(session => session.exercises.some(exercise => /optional \+2\.5 lb after two strong sessions/.test(exercise[1]))));
+});
+
+test('uses a saved starting baseline until completed workout data exists', () => {
+  const plan = generatePlan({ ...profile, goal: 'run_stronger', baseline: { weeklyRunMiles: 12, longestRunMiles: 4, weeklyLiftSets: 10, averageDailySteps: 6500 } }, { now: wednesday });
+  assert.equal(plan.dataSignals.baselineSource, 'user');
+  assert.equal(plan.dataSignals.suggestedMiles, 12);
+  assert.match(plan.prescription.headline, /12 mile/);
+  const longRun = plan.sessions.find(session => session.title === 'Long easy effort');
+  assert.ok(longRun.exercises.some(exercise => /4\.5 mi/.test(exercise[1])));
+});
+
+test('prefers recent logged training over a declared running baseline', () => {
+  const workouts = [
+    { outcome: 'completed', perceivedEffort: 5, loggedAt: '2026-07-13T20:00:00Z', details: { running: { distance: 3 } } },
+    { outcome: 'completed', perceivedEffort: 5, loggedAt: '2026-07-14T20:00:00Z', details: { running: { distance: 3 } } }
+  ];
+  const plan = generatePlan({ ...profile, baseline: { weeklyRunMiles: 20 } }, { now: wednesday, workouts });
+  assert.equal(plan.dataSignals.baselineSource, 'logged');
+  assert.equal(plan.dataSignals.suggestedMiles, 6.5);
+});
+
+test('uses experience and lift type for conservative load increases', () => {
+  const workouts = ['2026-07-13', '2026-07-14'].flatMap(loggedAt => [
+    { outcome: 'completed', perceivedEffort: 6, loggedAt: `${loggedAt}T20:00:00Z`, details: { lifts: [{ exercise: 'Bench press', sets: 3, reps: 10, weight: '100 lb' }] } },
+    { outcome: 'completed', perceivedEffort: 6, loggedAt: `${loggedAt}T21:00:00Z`, details: { lifts: [{ exercise: 'Back squat', sets: 3, reps: 10, weight: '200 lb' }] } }
+  ]);
+  const plan = generatePlan({ ...profile, goal: 'build_strength', trainingLevel: 'new' }, { now: wednesday, workouts });
+  const exercises = plan.sessions.flatMap(session => session.exercises);
+  const bench = exercises.find(exercise => exercise[0] === 'Bench press');
+  const squat = exercises.find(exercise => exercise[0] === 'Back squat');
+  assert.match(bench[1], /102\.5 lb/);
+  assert.match(squat[1], /205 lb/);
+});
+
+test('holds lifting load when the top rep range was not repeated twice', () => {
+  const workouts = [
+    { outcome: 'completed', perceivedEffort: 6, loggedAt: '2026-07-13T20:00:00Z', details: { lifts: [{ exercise: 'Bench press', sets: 3, reps: 9, weight: '100 lb' }] } },
+    { outcome: 'completed', perceivedEffort: 6, loggedAt: '2026-07-14T20:00:00Z', details: { lifts: [{ exercise: 'Bench press', sets: 3, reps: 10, weight: '100 lb' }] } }
+  ];
+  const plan = generatePlan({ ...profile, goal: 'build_strength' }, { now: wednesday, workouts });
+  assert.ok(plan.sessions.some(session => session.exercises.some(exercise => exercise[0] === 'Bench press' && /repeat last load/.test(exercise[1]))));
 });

@@ -15,11 +15,11 @@ function toUser(row) {
   return {
     id: row.id, name: row.name, email: row.email, passwordHash: row.password_hash, role: row.role,
     createdAt: row.created_at, missedToday: row.missed_today_at ? { at: row.missed_today_at } : null,
-    profile: row.goal ? { goal: row.goal, trainingDays: row.training_days, sessionMinutes: row.session_minutes, trainingLevel: row.training_level, equipment: row.equipment, trainingLocation: row.training_location, timezone: row.timezone, constraints: row.constraints, healthConsent: row.health_consent, aiConsent: row.ai_consent, updatedAt: row.updated_at } : null
+    profile: row.goal ? { goal: row.goal, trainingDays: row.training_days, sessionMinutes: row.session_minutes, trainingLevel: row.training_level, equipment: row.equipment, trainingLocation: row.training_location, timezone: row.timezone, baseline: row.baseline || {}, constraints: row.constraints, healthConsent: row.health_consent, aiConsent: row.ai_consent, updatedAt: row.updated_at } : null
   };
 }
 const userSelect = `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.created_at, u.missed_today_at,
-  p.goal, p.training_days, p.session_minutes, p.training_level, p.equipment, p.training_location, p.timezone, p.constraints, p.health_consent, p.ai_consent, p.updated_at
+  p.goal, p.training_days, p.session_minutes, p.training_level, p.equipment, p.training_location, p.timezone, p.baseline, p.constraints, p.health_consent, p.ai_consent, p.updated_at
   FROM users u LEFT JOIN profiles p ON p.user_id = u.id`;
 
 async function initSchema() {
@@ -31,11 +31,12 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS profiles (
       user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       goal TEXT NOT NULL, training_days TEXT[] NOT NULL, session_minutes INTEGER NOT NULL,
-      training_level TEXT NOT NULL, equipment TEXT NOT NULL, training_location TEXT NOT NULL DEFAULT 'both', timezone TEXT NOT NULL,
+      training_level TEXT NOT NULL, equipment TEXT NOT NULL, training_location TEXT NOT NULL DEFAULT 'both', timezone TEXT NOT NULL, baseline JSONB NOT NULL DEFAULT '{}'::jsonb,
       constraints TEXT NOT NULL DEFAULT '', health_consent BOOLEAN NOT NULL DEFAULT false, ai_consent BOOLEAN NOT NULL DEFAULT false, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS ai_consent BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS training_location TEXT NOT NULL DEFAULT 'both';
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS baseline JSONB NOT NULL DEFAULT '{}'::jsonb;
     CREATE TABLE IF NOT EXISTS workouts (
       id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       title TEXT NOT NULL, type TEXT NOT NULL, outcome TEXT NOT NULL, duration_minutes INTEGER NOT NULL,
@@ -179,11 +180,11 @@ async function getSystemOverview() {
   return { database: 'operational', ...status, recentErrors, generatedAt: new Date().toISOString() };
 }
 async function upsertProfile(userId, profile) {
-  await pool.query(`INSERT INTO profiles (user_id, goal, training_days, session_minutes, training_level, equipment, training_location, timezone, constraints, health_consent, ai_consent)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+  await pool.query(`INSERT INTO profiles (user_id, goal, training_days, session_minutes, training_level, equipment, training_location, timezone, baseline, constraints, health_consent, ai_consent)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12)
     ON CONFLICT (user_id) DO UPDATE SET goal=EXCLUDED.goal, training_days=EXCLUDED.training_days, session_minutes=EXCLUDED.session_minutes,
-      training_level=EXCLUDED.training_level, equipment=EXCLUDED.equipment, training_location=EXCLUDED.training_location, timezone=EXCLUDED.timezone, constraints=EXCLUDED.constraints,
-      health_consent=EXCLUDED.health_consent, ai_consent=EXCLUDED.ai_consent, updated_at=now()`, [userId, profile.goal, profile.trainingDays, profile.sessionMinutes, profile.trainingLevel, profile.equipment, profile.trainingLocation, profile.timezone, profile.constraints, profile.healthConsent, profile.aiConsent]);
+      training_level=EXCLUDED.training_level, equipment=EXCLUDED.equipment, training_location=EXCLUDED.training_location, timezone=EXCLUDED.timezone, baseline=EXCLUDED.baseline, constraints=EXCLUDED.constraints,
+      health_consent=EXCLUDED.health_consent, ai_consent=EXCLUDED.ai_consent, updated_at=now()`, [userId, profile.goal, profile.trainingDays, profile.sessionMinutes, profile.trainingLevel, profile.equipment, profile.trainingLocation, profile.timezone, JSON.stringify(profile.baseline || {}), profile.constraints, profile.healthConsent, profile.aiConsent]);
   return getUserById(userId);
 }
 async function markMissedToday(userId) { await pool.query('UPDATE users SET missed_today_at = now() WHERE id = $1', [userId]); return getUserById(userId); }
