@@ -27,7 +27,7 @@ People can:
 - Log runs, lifting sets/reps/weight, recovery, CrossFit, and other workouts; edit a manual entry later.
 - See recent activity and weekly/monthly/yearly summaries.
 - Use the rules-based **Beta Coach** for some clear commands.
-- Send beta feedback to `kwhin03@gmail.com` through the Today page.
+- Send beta feedback to `kevwhin03@gmail.com` through the Today page.
 
 The Connect page deliberately says Strava, Garmin, and Samsung Health are **Coming soon**. They are not part of this beta promise.
 
@@ -345,4 +345,3 @@ After that is working with testers, decide whether live Smart AI is worth the co
 - **Metrics:** Measurements such as CPU, memory, and network traffic.
 - **Restore window:** The period Neon keeps history that can help recover older data.
 - **Private beta:** A limited test with real people while features and reliability are still improving.
-

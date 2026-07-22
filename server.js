@@ -11,7 +11,7 @@ const { buildWeeklyCoachSummary } = require('./weekly-summary');
 const { buildTrainingWheel } = require('./training-wheel');
 const { buildActivityGraph, buildActivityGraphRange } = require('./activity-graph');
 const { validUsageEvent } = require('./usage-events');
-const feedbackRecipient = process.env.FEEDBACK_RECIPIENT_EMAIL || 'kwhin03@gmail.com';
+const feedbackRecipient = process.env.FEEDBACK_RECIPIENT_EMAIL || 'kevwhin03@gmail.com';
 const ownerEmails = new Set(String(process.env.OWNER_EMAILS || feedbackRecipient).split(',').map(email => email.trim().toLowerCase()).filter(Boolean));
 const strava = require('./strava');
 
