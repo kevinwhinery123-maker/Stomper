@@ -1,6 +1,7 @@
 const allowedUsageEvents = new Set([
   'account_created', 'signed_in', 'plan_viewed', 'workout_logged', 'workout_updated',
-  'coach_message_sent', 'weekly_summary_viewed', 'strava_connected', 'strava_synced'
+  'coach_message_sent', 'weekly_summary_viewed', 'strava_connected', 'strava_synced',
+  'daily_reset_completed'
 ]);
 
 function validUsageEvent(name) {

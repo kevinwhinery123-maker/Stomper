@@ -84,6 +84,11 @@ async function initSchema() {
     );
     ALTER TABLE daily_checkins ADD COLUMN IF NOT EXISTS training_mode TEXT NOT NULL DEFAULT 'auto';
     ALTER TABLE daily_checkins ADD COLUMN IF NOT EXISTS setup TEXT NOT NULL DEFAULT 'auto';
+    CREATE TABLE IF NOT EXISTS daily_resets (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, reset_date DATE NOT NULL,
+      action TEXT NOT NULL, completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, reset_date)
+    );
     CREATE TABLE IF NOT EXISTS tester_feedback (
       id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       message TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -106,6 +111,12 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS usage_events_name_time_idx ON usage_events(event_name, occurred_at DESC);
     CREATE INDEX IF NOT EXISTS usage_events_user_time_idx ON usage_events(user_id, occurred_at DESC);
+    CREATE TABLE IF NOT EXISTS training_wheel_snapshots (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      week_start DATE NOT NULL, week_end DATE NOT NULL, snapshot JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (user_id, week_start)
+    );
+    CREATE INDEX IF NOT EXISTS training_wheel_snapshots_user_week_idx ON training_wheel_snapshots(user_id, week_start DESC);
   `);
 }
 async function getUserById(id) { return toUser((await pool.query(`${userSelect} WHERE u.id = $1`, [id])).rows[0]); }
@@ -257,4 +268,18 @@ async function getFriendActivities(friendIds) { if (!friendIds.length) return []
 async function getDailyCheckin(userId, date) { return (await pool.query('SELECT available_minutes AS "availableMinutes", energy, training_mode AS "trainingMode", setup FROM daily_checkins WHERE user_id = $1 AND checkin_date = $2::date', [userId, date])).rows[0] || null; }
 async function upsertDailyCheckin(userId, date, checkin) { await pool.query(`INSERT INTO daily_checkins (user_id, checkin_date, available_minutes, energy, training_mode, setup) VALUES ($1,$2,$3,$4,$5,$6)
   ON CONFLICT (user_id, checkin_date) DO UPDATE SET available_minutes=EXCLUDED.available_minutes, energy=EXCLUDED.energy, training_mode=EXCLUDED.training_mode, setup=EXCLUDED.setup, updated_at=now()`, [userId, date, checkin.availableMinutes, checkin.energy, checkin.trainingMode || 'auto', checkin.setup || 'auto']); return getDailyCheckin(userId, date); }
-module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, purgeExpiredSessions, deleteUser, healthCheck, recordAppError, recordUsageEvent, getUsageOverview, getOwnerUserHealth, getSystemOverview, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, deleteCoachConversation, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin };
+async function getDailyReset(userId, date) { return (await pool.query('SELECT action, completed_at AS "completedAt" FROM daily_resets WHERE user_id = $1 AND reset_date = $2::date', [userId, date])).rows[0] || null; }
+async function upsertDailyReset(userId, date, action) { return (await pool.query(`INSERT INTO daily_resets (user_id, reset_date, action) VALUES ($1,$2,$3)
+  ON CONFLICT (user_id, reset_date) DO UPDATE SET action=EXCLUDED.action, completed_at=now()
+  RETURNING action, completed_at AS "completedAt"`, [userId, date, action])).rows[0]; }
+async function getPreviousTrainingWheelSnapshot(userId, beforeWeekStart) {
+  return (await pool.query(`SELECT snapshot FROM training_wheel_snapshots
+    WHERE user_id = $1 AND week_start < $2::date ORDER BY week_start DESC LIMIT 1`, [userId, beforeWeekStart])).rows[0]?.snapshot || null;
+}
+async function upsertTrainingWheelSnapshot(userId, wheel) {
+  await pool.query(`INSERT INTO training_wheel_snapshots (user_id, week_start, week_end, snapshot)
+    VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (user_id, week_start) DO UPDATE
+    SET week_end=EXCLUDED.week_end, snapshot=EXCLUDED.snapshot, updated_at=now()`,
+  [userId, wheel.weekStart, wheel.weekEnd, JSON.stringify(wheel)]);
+}
+module.exports = { pool, initSchema, getUserById, getUserByEmail, createUser, createSession, getSessionUserId, deleteSession, purgeExpiredSessions, deleteUser, healthCheck, recordAppError, recordUsageEvent, getUsageOverview, getOwnerUserHealth, getSystemOverview, upsertProfile, markMissedToday, getWorkouts, addWorkout, updateWorkout, addTesterFeedback, createCoachConversation, getCoachConversations, getCoachConversation, getLatestCoachConversation, getCoachMessages, addCoachMessage, deleteCoachConversation, getStravaConnection, upsertStravaConnection, deleteStravaConnection, addStravaActivity, hasStravaActivity, getActivityDashboard, getDashboardRange, getPlanOverrides, upsertPlanOverride, getFriendships, createFriendRequest, acceptFriendRequest, getFriendActivities, getDailyCheckin, upsertDailyCheckin, getDailyReset, upsertDailyReset, getPreviousTrainingWheelSnapshot, upsertTrainingWheelSnapshot };
