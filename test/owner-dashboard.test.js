@@ -15,6 +15,14 @@ test('all owner dashboard endpoints require owner authorization', () => {
   }
 });
 
+test('Strava connection management is restricted to the owner during beta', () => {
+  for (const route of ['/api/strava', '/api/strava/connect', '/api/strava/sync', '/api/strava/disconnect']) {
+    const start = server.indexOf(`url.pathname === '${route}'`);
+    assert.notEqual(start, -1, `${route} should exist`);
+    assert.match(server.slice(start, start + 220), /requireOwner\(request, response\)/);
+  }
+});
+
 test('owner user-health query excludes private content fields', () => {
   const start = database.indexOf('async function getOwnerUserHealth');
   const end = database.indexOf('async function getSystemOverview', start);
