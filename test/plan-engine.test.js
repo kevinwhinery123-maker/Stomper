@@ -138,6 +138,14 @@ test('holds lifting load when the top rep range was not repeated twice', () => {
   assert.ok(plan.sessions.some(session => session.exercises.some(exercise => exercise[0] === 'Bench press' && /repeat last load/.test(exercise[1]))));
 });
 
+test('uses the saved load without crashing after the first weighted lift', () => {
+  const workouts = [
+    { outcome: 'completed', perceivedEffort: 6, loggedAt: '2026-07-14T20:00:00Z', details: { lifts: [{ exercise: 'Back squat', sets: 4, reps: 8, weight: '135 lb' }] } }
+  ];
+  const plan = generatePlan({ ...profile, goal: 'both' }, { now: wednesday, workouts });
+  assert.ok(plan.sessions.some(session => session.exercises.some(exercise => exercise[0] === 'Back squat' && /135 lb.*repeat last load/.test(exercise[1]))));
+});
+
 test('builds a phased triathlon week with swim bike run and brick work', () => {
   const triathlonProfile = {
     ...profile,

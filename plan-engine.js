@@ -84,7 +84,7 @@ function loadPrescription(profile, signals, aliases, fallbackName, sets, reps) {
   const latestWeight = numericWeight(latest.weight), previousWeight = numericWeight(previous?.weight);
   const repTop = Math.max(...String(reps).match(/\d+/g).map(Number));
   const repeatedTopRange = previous && latest.reps >= repTop && previous.reps >= repTop && latestWeight !== null && previousWeight !== null && Math.abs(latestWeight - previousWeight) < .01;
-  const effortSupportsProgress = latest.effort !== null && previous?.effort !== null && latest.effort <= 7 && previous.effort <= 7;
+  const effortSupportsProgress = latest.effort !== null && previous?.effort != null && latest.effort <= 7 && previous.effort <= 7;
   const readyToProgress = repeatedTopRange && effortSupportsProgress && !signals.hardRecent;
   if (readyToProgress) { const increment = liftIncrement(record.name, latestWeight, profile.trainingLevel); return [record.name, `${sets} × ${reps} @ ${formatWeight(latestWeight + increment)} · optional +${increment} lb after two strong sessions`]; }
   return [record.name, `${sets} × ${reps} @ ${formatWeight(latest.weight)} · repeat last load`];
