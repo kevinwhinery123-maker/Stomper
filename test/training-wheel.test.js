@@ -27,6 +27,17 @@ test('builds weekly progress from the current plan and logged work', () => {
   assert.equal(wheel.axes.length, 8);
 });
 
+test('shows a starting profile and daily rings before the first workout', () => {
+  const wheel = buildTrainingWheel({ plan, workouts: [] });
+  assert.equal(wheel.status, 'building-baseline');
+  assert.ok(wheel.overallScore > 0 && wheel.overallScore < 50);
+  assert.equal(wheel.today.score, 0);
+  assert.equal(wheel.today.checkin.score, 0);
+  assert.equal(wheel.today.plan.score, 0);
+  assert.equal(wheel.today.reset.score, 0);
+  assert.equal(wheel.axes.length, 8);
+});
+
 test('limits slow overall movement to three points up or four down', () => {
   const previousSnapshot = { overall: Object.fromEntries(['consistency','recovery','runVolume','paceProgress','longRunBase','liftVolume','strengthProgress','trainingBalance'].map(key => [key, 60])) };
   const wheel = buildTrainingWheel({ plan, workouts: [workout('2026-07-20'), workout('2026-07-22')], previousSnapshot });
@@ -61,4 +72,25 @@ test('closes Check-in and Reset rings from saved daily actions', () => {
   assert.equal(wheel.today.reset.score, 100);
   assert.equal(wheel.today.reset.action, 'mobility');
   assert.ok(wheel.weekly.recovery > 0);
+});
+
+test('uses triathlon-specific attributes for a race plan', () => {
+  const triathlonPlan = {
+    ...plan,
+    phase: { key: 'base', label: 'Base', weeksToRace: 18 },
+    prescription: { label: 'Triathlon training' },
+    sessions: [
+      { date: '2026-07-20', title: 'Swim technique', type: 'Swimming', restDay: false, exercises: [['Swim', '1500 yd']] },
+      { date: '2026-07-22', title: 'Bike + run', type: 'Brick', restDay: false, exercises: [['Bike', '20 mi'], ['Run', '2 mi']] },
+      { date: '2026-07-25', title: 'Long run', type: 'Running', restDay: false, exercises: [['Run', '6 mi']] }
+    ]
+  };
+  const workouts = [
+    workout('2026-07-20', { type: 'swimming', details: { swimming: { distanceYards: 1500 } } }),
+    workout('2026-07-22', { type: 'brick', details: { cycling: { distanceMiles: 20 }, running: { distance: 2 } } })
+  ];
+  const wheel = buildTrainingWheel({ plan: triathlonPlan, workouts });
+  assert.deepEqual(wheel.axes.map(axis => axis.key), ['consistency', 'recovery', 'swimEndurance', 'bikeEndurance', 'runEndurance', 'strength', 'mobility']);
+  assert.equal(wheel.weekly.swimEndurance, 100);
+  assert.equal(wheel.weekly.runEndurance, 25);
 });

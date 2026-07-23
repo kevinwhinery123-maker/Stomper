@@ -1,5 +1,7 @@
 const RUN_PATTERN = /run|jog|treadmill/i;
 const LIFT_PATTERN = /lift|strength|weight|crossfit/i;
+const SWIM_PATTERN = /swim|open water/i;
+const BIKE_PATTERN = /bike|cycling|ride|brick/i;
 
 function localDateKey(value, timezone = 'UTC') {
   const date = value instanceof Date ? value : new Date(value);
@@ -23,11 +25,17 @@ function round(value, places = 1) {
 function classify(workout) {
   const type = String(workout.type || 'other');
   const runDistance = Number(workout.details?.running?.distance || 0);
+  const swimDistance = Number(workout.details?.swimming?.distanceYards || 0);
+  const bikeDistance = Number(workout.details?.cycling?.distanceMiles || 0);
   const lifts = Array.isArray(workout.details?.lifts) ? workout.details.lifts : [];
   return {
     isRun: runDistance > 0 || RUN_PATTERN.test(type),
     isLift: lifts.length > 0 || LIFT_PATTERN.test(type),
+    isSwim: swimDistance > 0 || SWIM_PATTERN.test(type),
+    isBike: bikeDistance > 0 || BIKE_PATTERN.test(type),
     runDistance: Number.isFinite(runDistance) && runDistance > 0 ? runDistance : 0,
+    swimDistance: Number.isFinite(swimDistance) && swimDistance > 0 ? swimDistance : 0,
+    bikeDistance: Number.isFinite(bikeDistance) && bikeDistance > 0 ? bikeDistance : 0,
     lifts
   };
 }
@@ -38,6 +46,8 @@ function summarizeWindow(records, start, end) {
   const efforts = performed.map(record => Number(record.workout.perceivedEffort)).filter(value => Number.isFinite(value) && value >= 1 && value <= 10);
   const runRecords = performed.filter(record => record.kind.isRun);
   const liftRecords = performed.filter(record => record.kind.isLift);
+  const swimRecords = performed.filter(record => record.kind.isSwim);
+  const bikeRecords = performed.filter(record => record.kind.isBike);
   const liftingSets = liftRecords.reduce((total, record) => total + record.kind.lifts.reduce((sets, lift) => sets + Math.max(0, Number(lift.sets) || 0), 0), 0);
   return {
     start, end,
@@ -48,6 +58,10 @@ function summarizeWindow(records, start, end) {
     trainingMinutes: Math.round(performed.reduce((total, record) => total + Math.max(0, Number(record.workout.durationMinutes) || 0), 0)),
     runningSessions: runRecords.length,
     runningMiles: round(runRecords.reduce((total, record) => total + record.kind.runDistance, 0), 2),
+    swimmingSessions: swimRecords.length,
+    swimmingYards: Math.round(swimRecords.reduce((total, record) => total + record.kind.swimDistance, 0)),
+    cyclingSessions: bikeRecords.length,
+    cyclingMiles: round(bikeRecords.reduce((total, record) => total + record.kind.bikeDistance, 0), 2),
     liftingSessions: liftRecords.length,
     liftingSets: Math.round(liftingSets),
     averageEffort: efforts.length ? round(efforts.reduce((total, effort) => total + effort, 0) / efforts.length, 1) : null,
@@ -99,6 +113,8 @@ function buildFitnessSummary(workouts = [], options = {}) {
     sources
   };
   const trends = {
+    swimmingYards: compare(current7.swimmingYards, previous7.swimmingYards, 'swimming yards'),
+    cyclingMiles: compare(current7.cyclingMiles, previous7.cyclingMiles, 'cycling miles'),
     runningMiles: compare(current7.runningMiles, previous7.runningMiles, 'running miles'),
     trainingMinutes: compare(current7.trainingMinutes, previous7.trainingMinutes, 'training minutes')
   };

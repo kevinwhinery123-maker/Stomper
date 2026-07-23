@@ -56,7 +56,7 @@ function interpretCoachAction(message, plan, profile = {}) {
   const days = weekdayList(text);
   if (days.length && /\b(change|set|update|move|my)\b.{0,40}\b(schedule|days|availability|available|train)\b|\b(i can train|my training days are)\b/.test(text)) return { type: 'training_days', trainingDays: days };
   if (/\b(change|set|update)\b.{0,30}\b(goal|training focus)\b|\bmy goal is\b/.test(text)) {
-    const goal = /\b(lose weight|weight loss|fat loss)\b/.test(text) ? 'lose_weight' : /\b(general fitness|healthy fitness|overall fitness|maintain fitness)\b/.test(text) ? 'general_fitness' : /\b(hybrid|both|run and lift|running and lifting)\b/.test(text) ? 'both' : /\b(run|running)\b/.test(text) ? 'run_stronger' : /\b(lift|lifting|strength|muscle)\b/.test(text) ? 'build_strength' : null;
+    const goal = /\b(triathlon|ironman|70\.3)\b/.test(text) ? 'triathlon' : /\b(lose weight|weight loss|fat loss)\b/.test(text) ? 'lose_weight' : /\b(general fitness|healthy fitness|overall fitness|maintain fitness)\b/.test(text) ? 'general_fitness' : /\b(hybrid|both|run and lift|running and lifting)\b/.test(text) ? 'both' : /\b(run|running)\b/.test(text) ? 'run_stronger' : /\b(lift|lifting|strength|muscle)\b/.test(text) ? 'build_strength' : null;
     if (goal) return { type: 'training_goal', goal };
   }
   const minutesMatch = text.match(/\b(\d{1,3})\s*(?:min|mins|minute|minutes)\b/);

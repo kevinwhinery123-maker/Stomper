@@ -137,3 +137,90 @@ test('holds lifting load when the top rep range was not repeated twice', () => {
   const plan = generatePlan({ ...profile, goal: 'build_strength' }, { now: wednesday, workouts });
   assert.ok(plan.sessions.some(session => session.exercises.some(exercise => exercise[0] === 'Bench press' && /repeat last load/.test(exercise[1]))));
 });
+
+test('builds a phased triathlon week with swim bike run and brick work', () => {
+  const triathlonProfile = {
+    ...profile,
+    goal: 'triathlon',
+    trainingDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Sat', 'Sun'],
+    baseline: {
+      weeklyRunMiles: 12,
+      longestRunMiles: 5,
+      weeklySwimYards: 4000,
+      weeklyBikeMiles: 60,
+      triathlon: { distance: '70.3', raceDate: '2026-11-01', raceGoal: 'finish', swimConfidence: 'pool' }
+    }
+  };
+  const plan = generatePlan(triathlonProfile, { now: wednesday });
+  assert.equal(plan.phase.key, 'base');
+  assert.match(plan.prescription.label, /Triathlon/);
+  assert.ok(plan.sessions.some(session => session.type === 'Swimming'));
+  assert.ok(plan.sessions.some(session => session.type === 'Cycling'));
+  assert.ok(plan.sessions.some(session => session.type === 'Running'));
+  assert.ok(plan.sessions.some(session => session.type === 'Brick'));
+});
+
+test('uses each day saved minutes and equipment instead of global settings', () => {
+  const scheduledProfile = {
+    ...profile,
+    baseline: {
+      weekSchedule: {
+        Mon: { enabled: true, minutes: 30, equipment: 'bodyweight' },
+        Wed: { enabled: true, minutes: 75, equipment: 'full_gym' }
+      }
+    }
+  };
+  const plan = generatePlan(scheduledProfile, { now: wednesday });
+  const monday = plan.sessions.find(session => session.day === 'Mon');
+  const wednesdaySession = plan.sessions.find(session => session.day === 'Wed');
+  assert.equal(plan.summary.planned, 2);
+  assert.equal(monday.minutes, 30);
+  assert.equal(monday.equipment, 'bodyweight');
+  assert.equal(wednesdaySession.minutes, 75);
+  assert.equal(wednesdaySession.equipment, 'full_gym');
+});
+
+test('does not call scheduled days before the user joined missed workouts', () => {
+  const lateStart = generatePlan({
+    ...profile,
+    trainingDays: ['Mon', 'Wed', 'Fri'],
+    baseline: { planStartedAt: '2026-07-15' }
+  }, { now: new Date('2026-07-15T16:00:00Z') });
+  assert.equal(lateStart.sessions.find(session => session.day === 'Mon').status, 'before-start');
+  assert.equal(lateStart.sessions.find(session => session.day === 'Wed').status, 'today');
+  assert.equal(lateStart.summary.planned, 2);
+});
+
+test('uses workout-specific automatic durations unless a day is fixed', () => {
+  const timed = generatePlan({
+    ...profile,
+    goal: 'run_stronger',
+    trainingDays: ['Mon', 'Wed', 'Fri'],
+    baseline: {
+      weekSchedule: {
+        Mon: { enabled: true, durationMode: 'auto', minutes: 0, equipment: 'bodyweight' },
+        Wed: { enabled: true, durationMode: 'fixed', minutes: 35, equipment: 'bodyweight' },
+        Fri: { enabled: true, durationMode: 'auto', minutes: 0, equipment: 'bodyweight' }
+      }
+    }
+  }, { now: wednesday });
+  assert.equal(timed.sessions.find(session => session.day === 'Wed').minutes, 35);
+  assert.equal(timed.sessions.find(session => session.day === 'Wed').durationSource, 'fixed');
+  assert.ok(timed.sessions.find(session => session.day === 'Fri').minutes > 45);
+  assert.equal(timed.sessions.find(session => session.day === 'Fri').durationSource, 'tempo');
+});
+
+test('builds toward a dated running milestone', () => {
+  const dated = generatePlan({
+    ...profile,
+    goal: 'run_stronger',
+    baseline: {
+      weeklyRunMiles: 8,
+      longestRunMiles: 3,
+      milestone: { kind: 'run_distance', targetDate: '2026-12-12', targetDistanceMiles: 5, eventName: 'Five-mile goal' }
+    }
+  }, { now: wednesday });
+  assert.equal(dated.milestone.kind, 'run_distance');
+  assert.ok(dated.milestone.weeksToGoal > 0);
+  assert.match(dated.prescription.headline, /5 mile goal/);
+});
