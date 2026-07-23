@@ -345,4 +345,3 @@ After that is working with testers, decide whether live Smart AI is worth the co
 - **Metrics:** Measurements such as CPU, memory, and network traffic.
 - **Restore window:** The period Neon keeps history that can help recover older data.
 - **Private beta:** A limited test with real people while features and reliability are still improving.
-
