@@ -39,3 +39,12 @@ test('builds the walking guide from the user baseline when available', () => {
   const graph = buildActivityGraph({ ...plan, baseline: { averageDailySteps: 6500 } }, []);
   assert.equal(graph.series.walk.recommended, 6825);
 });
+
+test('tracks swimming and cycling for triathlon activity graphs', () => {
+  const graph = buildActivityGraph(plan, [
+    { outcome: 'completed', loggedAt: '2026-07-20T12:00:00Z', details: { swimming: { distanceYards: 1800 } } },
+    { outcome: 'completed', loggedAt: '2026-07-21T12:00:00Z', details: { cycling: { distanceMiles: 24.5 } } }
+  ]);
+  assert.equal(graph.series.swim.total, 1800);
+  assert.equal(graph.series.bike.total, 24.5);
+});

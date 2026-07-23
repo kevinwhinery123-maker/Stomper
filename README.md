@@ -1,8 +1,8 @@
-# Tempo fitness-coach prototype
+# Tempo fitness coach
 
 ## What is included
 
-`index.html` is a self-contained, clickable product prototype for a personalized fitness coach. It deliberately uses local mock data so it can be tested before a backend exists.
+Tempo is a working hybrid fitness coaching application backed by PostgreSQL. It supports personalized running, lifting, and triathlon plans, workout logging, progress visuals, coaching conversations, and an owner dashboard.
 
 It demonstrates four core moments:
 
